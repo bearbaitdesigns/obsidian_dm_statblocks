@@ -107,3 +107,19 @@
 /* Rounded corners on every DM Statblocks button (themes sometimes square them off) */
 .dms-btn, .dms-tracker button, .dms-statblock button, .dms-encounter button, .dms-builder button,
 .dms-wide-modal button, .dms-gen-modal button, .dms-crcheck button, .dms-tools-block button { border-radius: 8px !important; }
+/* destructive actions */
+.dms-btn.dms-danger:hover { color: var(--text-error); border-color: var(--text-error); }
+/* session / prep encounters panel */
+.dms-session-enc { border:1px solid var(--background-modifier-border); border-left:4px solid #b03a2e; border-radius:8px; padding:10px 12px; background: var(--background-primary-alt); }
+.dms-se-head { display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin-bottom:6px; }
+.dms-se-title { font-weight:700; font-size:1.05em; }
+.dms-se-tools { margin-left:auto; }
+.dms-pill { font-size: var(--font-ui-smaller); padding:0 7px; border-radius:999px; background: var(--background-modifier-hover); color: var(--text-muted); }
+.dms-se-list { display:grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap:8px; }
+.dms-se-card { border:1px solid var(--background-modifier-border); border-radius:8px; padding:8px 10px; background: var(--background-primary); }
+.dms-se-card.is-used { opacity:.65; }
+.dms-se-top { display:flex; align-items:center; gap:6px; flex-wrap:wrap; }
+.dms-se-name { font-weight:700; margin-right:auto; }
+.dms-se-mons { margin:4px 0 6px; }
+.dms-se-empty { padding:4px 0; }
+.dms-session-enc .dms-btn { border-radius: 8px !important; }

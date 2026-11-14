@@ -474,9 +474,25 @@ class DMStatblocksPlugin extends Plugin {
       entries.forEach(e => e.sb && this.addMonster(e.sb, e.f.path, e.n));
     }, 'mod-cta');
     btn(row, 'Edit', 'pencil', () => this.openEncounterEditor(src, ctx.sourcePath));
+    {
+      const hostFile = this.app.vault.getAbstractFileByPath(ctx.sourcePath);
+      if (hostFile instanceof TFile && this.fm(hostFile).type === 'encounter') btn(row, 'Delete encounter', 'trash-2', () => this.confirmDeleteEncounter(hostFile), 'dms-danger');
+      else if (hostFile instanceof TFile) btn(row, 'Remove', 'trash-2', () => this.removeEncounterBlock(hostFile, src), 'dms-danger');
+    }
     const srcFile = this.app.vault.getAbstractFileByPath(ctx.sourcePath);
     if (!(srcFile && this.fm(srcFile).type === 'encounter')) btn(row, 'Save as encounter note', 'file-plus', () => { const p = parseEncounterSrc(src); new EncounterBuilderModal(this, { title: p.title, monsters: p.monsters }, {}).open(); });
   }
+}
+
+class ConfirmDeleteModal extends Modal {
+  constructor(app, title, text, cta, onYes) { super(app); this.t = title; this.text = text; this.cta = cta; this.onYes = onYes; }
+  onOpen() {
+    const c = this.contentEl; c.createEl('h3', { text: this.t }); c.createEl('p', { text: this.text });
+    const r = c.createDiv({ cls: 'dms-row' });
+    btn(r, this.cta, 'trash-2', () => { this.close(); this.onYes(); }, 'mod-warning');
+    btn(r, 'Cancel', null, () => this.close());
+  }
+  onClose() { this.contentEl.empty(); }
 }
 
 class CountModal extends Modal {
@@ -1182,7 +1198,7 @@ function difficultyFor(xp, levels) {
 class EncounterBuilderModal extends Modal {
   constructor(plugin, init, opts) {
     super(plugin.app); this.plugin = plugin; this.opts = opts || {};
-    this.e = Object.assign({ title: '', monsters: [], location: '', session: '', environment: 'Any', target: 'Moderate', setup: '', terrain: '', tactics: '', treasure: '', levels: null }, init || {});
+    this.e = Object.assign({ title: '', monsters: [], location: '', session: '', prep: '', environment: 'Any', target: 'Moderate', setup: '', terrain: '', tactics: '', treasure: '', levels: null }, init || {});
     this.e.monsters = this.e.monsters.map(m => Object.assign({}, m));
   }
   bestiary() {
@@ -1209,6 +1225,7 @@ class EncounterBuilderModal extends Modal {
     const loc = field(g, 'Location', selectEl([['', '—'], ...places.map(p => [p, p])], e.location)); loc.addEventListener('change', () => e.location = loc.value);
     const ses = field(g, 'Session', selectEl([['', '—'], ...sessions.map(p => [p, p])], e.session)); ses.addEventListener('change', () => e.session = ses.value);
     const envs = [...new Set(this.bestiary().flatMap(f => [].concat(this.plugin.fm(f).environment || []).map(String)))].sort();
+    if (e.prep) g.createDiv({ cls: 'dms-f dms-muted', text: 'Linked to prep: ' + e.prep });
     const env = field(g, 'Environment (for suggestions)', selectEl(['Any', ...envs], e.environment)); env.addEventListener('change', () => e.environment = env.value);
     const target = field(g, 'Target difficulty', selectEl(['Low', 'Moderate', 'High'], e.target)); target.addEventListener('change', () => { e.target = target.value; draw(); });
     const lv = field(g, 'Party levels (blank = active party)', inputEl('text', (e.levels || []).join(', '), { placeholder: this.partyLevels().join(', ') || 'e.g. 3, 3, 4' }));
@@ -1229,6 +1246,10 @@ class EncounterBuilderModal extends Modal {
     }
     const foot = c.createDiv({ cls: 'dms-row dms-wrap dms-builder-foot' });
     if (this.opts.src && this.opts.file) btn(foot, 'Update this encounter', 'save', () => this.updateInPlace(), 'mod-cta');
+    if (this.opts.file) {
+      const ef = this.app.vault.getAbstractFileByPath(this.opts.file);
+      if (ef instanceof TFile && this.plugin.fm(ef).type === 'encounter') btn(foot, 'Delete encounter', 'trash-2', () => { this.close(); this.plugin.confirmDeleteEncounter(ef); }, 'dms-danger');
+    }
     btn(foot, 'Save as encounter note', 'file-plus', () => this.saveNote(), this.opts.src ? '' : 'mod-cta');
     btn(foot, 'Insert into current note', 'text-cursor-input', () => this.insert());
     btn(foot, 'Run now', 'swords', () => this.run());
@@ -1305,12 +1326,12 @@ class EncounterBuilderModal extends Modal {
     const levels = this.partyLevels(); const xp = e.monsters.reduce((a, m) => a + this.monsterInfo(m.name).xp * m.n, 0);
     const d = difficultyFor(xp, levels);
     const envs = e.environment && e.environment !== 'Any' ? [e.environment] : [];
-    const content = '---\ntype: encounter\nstatus: planned\ndifficulty: ' + d.label + '\nxp: ' + xp + '\nlocation: "' + (e.location ? '[[' + e.location + ']]' : '') + '"\nsession: "' + (e.session ? '[[' + e.session + ']]' : '') + '"\nenvironment: ' + JSON.stringify(envs) + '\ntags: [encounter]\n---\n# ' + name + '\n\n'
+    const content = '---\ntype: encounter\nstatus: planned\ndifficulty: ' + d.label + '\nxp: ' + xp + '\nlocation: "' + (e.location ? '[[' + e.location + ']]' : '') + '"\nsession: "' + (e.session ? '[[' + e.session + ']]' : '') + '"\nprep: "' + (e.prep ? '[[' + e.prep + ']]' : '') + '"\nenvironment: ' + JSON.stringify(envs) + '\ntags: [encounter]\n---\n# ' + name + '\n\n'
       + '> [!read-aloud] Setup\n> ' + (e.setup || '*What the characters see as it begins.*') + '\n\n' + this.block() + '\n\n'
       + '## Creatures\n' + e.monsters.map(m => '- [[' + m.name + ']] ×' + m.n).join('\n') + '\n\n'
       + '## Terrain & features\n' + (e.terrain || '- ') + '\n\n## Tactics\n' + (e.tactics || '- ') + '\n\n## Treasure\n' + (e.treasure || '- ') + '\n\n## What happened\n- [ ] Used in a session\n';
     const f = await this.app.vault.create(path, content);
-    new Notice('Encounter saved: ' + f.basename); this.close(); this.app.workspace.getLeaf(false).openFile(f);
+    new Notice('Encounter saved: ' + f.basename + (e.session || e.prep ? ' — linked to ' + (e.prep || e.session) : '')); this.close(); if (!this.opts.noOpen) this.app.workspace.getLeaf(false).openFile(f);
   }
   async updateInPlace() {
     const f = this.app.vault.getAbstractFileByPath(this.opts.file); if (!(f instanceof TFile)) return;
@@ -1340,7 +1361,38 @@ class EncounterBuilderModal extends Modal {
 }
 
 Object.assign(DMStatblocksPlugin.prototype, {
+  /** Move an encounter note to the trash (respects Obsidian's "Deleted files" setting, so it can be recovered). */
+  confirmDeleteEncounter(file) {
+    const linked = Object.entries(this.app.metadataCache.resolvedLinks || {}).filter(([src, to]) => src !== file.path && to && to[file.path]).length;
+    new ConfirmDeleteModal(this.app, 'Delete “' + file.basename + '”?',
+      'The encounter note goes to the trash, so you can still recover it.' + (linked ? ' ' + linked + ' note' + (linked > 1 ? 's link' : ' links') + ' to it; those links will show as unresolved.' : ''),
+      'Delete encounter', async () => {
+        if (this.app.fileManager.trashFile) await this.app.fileManager.trashFile(file); else await this.app.vault.trash(file, true);
+        new Notice('Deleted encounter: ' + file.basename);
+      }).open();
+  },
+  /** Remove an inline ```encounter block from a note (e.g. a session) without deleting the note. */
+  removeEncounterBlock(file, src) {
+    const p = parseEncounterSrc(src);
+    new ConfirmDeleteModal(this.app, 'Remove “' + (p.title || 'Encounter') + '” from ' + file.basename + '?', 'Only this encounter block is removed. The rest of the note stays as it is.', 'Remove block', async () => {
+      const text = await this.app.vault.read(file);
+      const block = '```encounter\n' + src + '\n```';
+      if (!text.includes(block)) { new Notice('Could not find that encounter block — edit the note by hand.'); return; }
+      await this.app.vault.modify(file, text.replace(new RegExp('\\n?' + block.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\n?'), '\n'));
+      new Notice('Encounter removed from ' + file.basename);
+    }).open();
+  },
+  pickEncounterToDelete() {
+    const f = this.app.workspace.getActiveFile();
+    if (f && this.fm(f).type === 'encounter') return this.confirmDeleteEncounter(f);
+    const items = this.app.vault.getMarkdownFiles().filter(x => !this.isTemplate(x) && this.fm(x).type === 'encounter').map(x => ({ file: x, label: x.basename + '  ·  ' + (this.fm(x).difficulty || '') + (this.fm(x).status ? ' · ' + this.fm(x).status : '') }));
+    if (!items.length) { new Notice('No saved encounters.'); return; }
+    new FileSuggest(this.app, items, it => this.confirmDeleteEncounter(it.file), 'Delete which encounter?').open();
+  },
   registerEncounterTools() {
+    this.registerMarkdownCodeBlockProcessor('session-encounters', (src, el, ctx) => this.renderSessionEncounters(src, el, ctx));
+    this.addCommand({ id: 'insert-session-encounters', name: 'Insert encounters panel (for session or prep notes)', editorCallback: ed => ed.replaceSelection('\n```session-encounters\n```\n') });
+    this.addCommand({ id: 'delete-encounter', name: 'Delete an encounter…', callback: () => this.pickEncounterToDelete() });
     this.addCommand({ id: 'new-encounter', name: 'Build a new encounter…', callback: () => new EncounterBuilderModal(this, {}, {}).open() });
     this.addCommand({ id: 'suggest-encounter', name: 'Suggest a random encounter…', callback: () => { const m = new EncounterBuilderModal(this, {}, {}); m.suggest(); m.open(); } });
     this.addRibbonIcon('shield', 'Encounter builder', () => new EncounterBuilderModal(this, {}, {}).open());
@@ -1351,6 +1403,146 @@ Object.assign(DMStatblocksPlugin.prototype, {
     const fm = f ? this.fm(f) : {};
     const strip = v => String(v || '').replace(/^\[\[|\]\]$/g, '');
     new EncounterBuilderModal(this, { title: p.title, monsters: p.monsters, levels: p.levels ? [].concat(p.levels).map(Number) : null, location: fm.type === 'encounter' ? strip(fm.location) : '', session: fm.type === 'encounter' ? strip(fm.session) : '' }, { src, file: sourcePath }).open();
+  },
+});
+
+/* ================================================================== */
+/* Session / prep encounters panel                                     */
+/* ================================================================== */
+/*
+ * ```session-encounters``` in a session or session-prep note lists the encounter notes linked to it
+ * (encounter `session` → this session, or `prep` → this prep note, or `session` → the prep's for_session).
+ * Add existing encounters, build new ones (saved as encounter notes, so they appear on the Encounters tab),
+ * run them in the tracker, mark them used, or unlink them.
+ */
+function linkTargetsOf(app, val, from) {
+  const out = [];
+  for (const raw of [].concat(val == null ? [] : val)) {
+    const re = /\[\[([^\]|#]+)(?:#[^\]|]*)?(?:\|[^\]]+)?\]\]/g; let m; const s = String(raw);
+    while ((m = re.exec(s))) { const d = app.metadataCache.getFirstLinkpathDest(m[1].trim(), from); if (d) out.push(d.path); }
+  }
+  return out;
+}
+
+Object.assign(DMStatblocksPlugin.prototype, {
+  /** Which session / prep this host note stands for. */
+  encounterHost(file) {
+    const fm = this.fm(file); const t = fm.type;
+    const host = { file, kind: t === 'prep' ? 'prep' : 'session', sessionPath: null, prepPath: null };
+    if (t === 'prep') { host.prepPath = file.path; host.sessionPath = linkTargetsOf(this.app, fm.for_session, file.path)[0] || null; }
+    else host.sessionPath = file.path;
+    return host;
+  },
+  encountersFor(host) {
+    return this.app.vault.getMarkdownFiles().filter(f => {
+      if (this.isTemplate(f) || this.fm(f).type !== 'encounter') return false;
+      const fm = this.fm(f);
+      const ses = linkTargetsOf(this.app, fm.session, f.path), prep = linkTargetsOf(this.app, fm.prep, f.path);
+      return (host.sessionPath && ses.includes(host.sessionPath)) || (host.prepPath && prep.includes(host.prepPath));
+    }).sort((a, b) => a.basename.localeCompare(b.basename));
+  },
+  /** Add a [[link]] to a frontmatter field, turning it into a list if it already links elsewhere. */
+  addLinkTo(fm, key, basename, from) {
+    const link = '[[' + basename + ']]';
+    const cur = [].concat(fm[key] == null || fm[key] === '' ? [] : fm[key]).map(String).filter(x => x.trim());
+    if (cur.some(x => x.replace(/^\[\[|\]\]$/g, '').split('|')[0] === basename)) return;
+    fm[key] = cur.length ? cur.concat(link) : link;
+  },
+  removeLinkTo(fm, key, path, from) {
+    const cur = [].concat(fm[key] == null || fm[key] === '' ? [] : fm[key]).map(String);
+    const keep = cur.filter(x => !linkTargetsOf(this.app, x, from).includes(path));
+    fm[key] = keep.length === 0 ? '' : keep.length === 1 ? keep[0] : keep;
+  },
+  async linkEncounter(encFile, host) {
+    const sesFile = host.sessionPath && this.app.vault.getAbstractFileByPath(host.sessionPath);
+    await this.app.fileManager.processFrontMatter(encFile, fm => {
+      if (host.kind === 'prep') { this.addLinkTo(fm, 'prep', host.file.basename, encFile.path); if (sesFile) this.addLinkTo(fm, 'session', sesFile.basename, encFile.path); }
+      else this.addLinkTo(fm, 'session', host.file.basename, encFile.path);
+    });
+    new Notice('Added “' + encFile.basename + '” to ' + host.file.basename);
+  },
+  async unlinkEncounter(encFile, host) {
+    await this.app.fileManager.processFrontMatter(encFile, fm => {
+      if (host.prepPath) this.removeLinkTo(fm, 'prep', host.prepPath, encFile.path);
+      if (host.kind === 'session') this.removeLinkTo(fm, 'session', host.sessionPath, encFile.path);
+    });
+    new Notice('Removed “' + encFile.basename + '” from ' + host.file.basename + ' (the encounter itself is kept).');
+  },
+  async runEncounterFile(file) {
+    const text = await this.app.vault.cachedRead(file);
+    const m = text.match(/```encounter[^\n]*\n([\s\S]*?)```/); if (!m) { new Notice('That encounter has no ```encounter block.'); return; }
+    const p = parseEncounterSrc(m[1].replace(/\n$/, ''));
+    this.addParty();
+    for (const mon of p.monsters) {
+      const f = this.app.metadataCache.getFirstLinkpathDest(mon.name, file.path); if (!f) continue;
+      const sb = extractStatblock(await this.app.vault.cachedRead(f)); if (sb) this.addMonster(sb, f.path, mon.n);
+    }
+  },
+  newEncounterFor(host, suggest) {
+    const sesFile = host.sessionPath && this.app.vault.getAbstractFileByPath(host.sessionPath);
+    const init = { session: sesFile ? sesFile.basename : '', prep: host.kind === 'prep' ? host.file.basename : '' };
+    const m = new EncounterBuilderModal(this, init, { noOpen: true });
+    if (suggest) m.suggest();
+    m.open();
+  },
+  renderSessionEncounters(src, el, ctx) {
+    el.addClass('dms-session-enc'); lpSafe(el);
+    const file = this.app.vault.getAbstractFileByPath(ctx.sourcePath);
+    if (!(file instanceof TFile)) { el.createDiv({ cls: 'dms-muted', text: 'Save this note first.' }); return; }
+    const child = new obsidian.MarkdownRenderChild(el); ctx.addChild(child);
+    const draw = async () => {
+      el.empty();
+      const host = this.encounterHost(file);
+      const encs = this.encountersFor(host);
+      const head = el.createDiv({ cls: 'dms-se-head' });
+      head.createSpan({ cls: 'dms-se-title', text: 'Encounters' });
+      head.createSpan({ cls: 'dms-pill', text: String(encs.length) });
+      const tools = head.createDiv({ cls: 'dms-row dms-wrap dms-se-tools' });
+      btn(tools, 'Add existing', 'link', () => {
+        const linked = new Set(encs.map(f => f.path));
+        const items = this.app.vault.getMarkdownFiles().filter(f => !this.isTemplate(f) && this.fm(f).type === 'encounter' && !linked.has(f.path)).map(f => {
+          const fm = this.fm(f); const ses = [].concat(fm.session || []).map(x => String(x).replace(/^\[\[|\]\]$/g, '')).filter(Boolean).join(', ');
+          return { file: f, label: f.basename + '  ·  ' + (fm.difficulty || '?') + ', ' + (fm.xp || 0) + ' XP' + (ses ? '  ·  currently in ' + ses : '') };
+        });
+        if (!items.length) { new Notice('No other saved encounters — use New encounter.'); return; }
+        new FileSuggest(this.app, items, it => this.linkEncounter(it.file, host), 'Add which encounter to ' + file.basename + '?').open();
+      });
+      btn(tools, 'New encounter', 'plus', () => this.newEncounterFor(host, false), 'mod-cta');
+      btn(tools, 'Suggest', 'sparkles', () => this.newEncounterFor(host, true));
+      if (!encs.length) {
+        el.createDiv({ cls: 'dms-muted dms-se-empty', text: host.kind === 'prep'
+          ? 'No encounters planned yet. Add an existing one or build a new one — new encounters are saved to the Encounters tab and linked to this prep' + (host.sessionPath ? ' and its session.' : '.')
+          : 'No encounters for this session yet. Add an existing one or build a new one — new encounters are saved to the Encounters tab and linked here.' });
+        return;
+      }
+      const list = el.createDiv({ cls: 'dms-se-list' });
+      for (const f of encs) {
+        const fm = this.fm(f);
+        const card = list.createDiv({ cls: 'dms-se-card' + (String(fm.status) === 'used' ? ' is-used' : '') });
+        const top = card.createDiv({ cls: 'dms-se-top' });
+        const a = top.createEl('a', { cls: 'internal-link dms-se-name', text: f.basename });
+        a.addEventListener('click', e => { e.preventDefault(); this.app.workspace.openLinkText(f.path, ctx.sourcePath, Keymap.isModEvent(e)); });
+        const diff = String(fm.difficulty || '—');
+        top.createSpan({ cls: 'dms-enc-label dms-diff-' + diff.split(' ')[0].toLowerCase(), text: diff });
+        top.createSpan({ cls: 'dms-muted', text: (fm.xp || 0) + ' XP' });
+        top.createSpan({ cls: 'dms-pill', text: String(fm.status || 'planned') });
+        const text = await this.app.vault.cachedRead(f);
+        const mm = text.match(/```encounter[^\n]*\n([\s\S]*?)```/);
+        const mons = mm ? parseEncounterSrc(mm[1].replace(/\n$/, '')).monsters : [];
+        const loc = String(fm.location || '').replace(/^\[\[|\]\]$/g, '');
+        card.createDiv({ cls: 'dms-muted dms-se-mons', text: (mons.map(m => m.name + (m.n > 1 ? ' ×' + m.n : '')).join(', ') || 'No monsters yet') + (loc ? '  ·  ' + loc : '') });
+        const row = card.createDiv({ cls: 'dms-row dms-wrap' });
+        btn(row, 'Run', 'swords', () => this.runEncounterFile(f), 'mod-cta');
+        btn(row, String(fm.status) === 'used' ? 'Mark planned' : 'Mark used', 'check', () => this.app.fileManager.processFrontMatter(f, x => { x.status = String(x.status) === 'used' ? 'planned' : 'used'; }));
+        btn(row, 'Edit', 'pencil', () => { const s2 = mm ? mm[1].replace(/\n$/, '') : ''; if (s2) this.openEncounterEditor(s2, f.path); else this.app.workspace.openLinkText(f.path, ctx.sourcePath, true); });
+        btn(row, 'Unlink', 'unlink', () => this.unlinkEncounter(f, host)).setAttr('title', 'Remove from this note (keeps the encounter)');
+      }
+    };
+    const refresh = obsidian.debounce ? obsidian.debounce(draw, 250, true) : draw;
+    child.registerEvent(this.app.metadataCache.on('changed', f => { if (f.path === file.path || this.fm(f).type === 'encounter') refresh(); }));
+    child.registerEvent(this.app.vault.on('delete', () => refresh()));
+    child.registerEvent(this.app.vault.on('rename', () => refresh()));
+    draw();
   },
 });
 
