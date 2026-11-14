@@ -1,0 +1,51 @@
+name: Release
+
+# Keeps the GitHub release for the current manifest.json version up to date, which is what BRAT installs from.
+#   - Every push to main (or a manual run) creates the release for that version,
+#     or, if it already exists, replaces its files with the latest main.js / manifest.json / styles.css.
+#   - Bump "version" in manifest.json (and add it to versions.json) to publish a NEW release.
+#     BRAT only offers users an update when the version number goes up.
+on:
+  push:
+    branches: [main]
+    tags: ['*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Read and check the version
+        id: version
+        run: |
+          v=$(jq -r .version manifest.json)
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          jq -e --arg v "$v" 'has($v)' versions.json > /dev/null || { echo "::error::versions.json has no entry for $v"; exit 1; }
+          if [ "$GITHUB_REF_TYPE" = "tag" ] && [ "$GITHUB_REF_NAME" != "$v" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match manifest.json version $v"; exit 1
+          fi
+
+      - name: Syntax check
+        run: node --check main.js
+
+      - name: Create or update the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          if gh release view "$VERSION" > /dev/null 2>&1; then
+            gh release upload "$VERSION" main.js manifest.json styles.css --clobber
+            echo "Updated the files on release $VERSION"
+          else
+            gh release create "$VERSION" main.js manifest.json styles.css --target "$GITHUB_SHA" --title "DM Statblocks $VERSION" --generate-notes
+            echo "Created release $VERSION"
+          fi
