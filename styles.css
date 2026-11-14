@@ -103,3 +103,7 @@
 .dms-gen-target { margin:10px 0 2px; font-size: var(--font-ui-small); }
 .dms-gen-target .dms-crcheck-badge { background: rgba(60,120,200,.25); }
 .dms-sec-sub { font-size: var(--font-ui-smaller); color: var(--text-muted); margin-top:6px; }
+
+/* Rounded corners on every DM Statblocks button (themes sometimes square them off) */
+.dms-btn, .dms-tracker button, .dms-statblock button, .dms-encounter button, .dms-builder button,
+.dms-wide-modal button, .dms-gen-modal button, .dms-crcheck button, .dms-tools-block button { border-radius: 8px !important; }

@@ -826,7 +826,7 @@ class RandomMonsterModal extends Modal {
   constructor(plugin) { super(plugin.app); this.plugin = plugin; this.sb = null; }
   onOpen() {
     const c = this.contentEl; c.addClass('dms-gen-modal'); this.modalEl.addClass('dms-wide-modal');
-    c.createEl('h3', { text: 'Random monster' });
+    c.createEl('h3', { text: 'Random monster/villain' });
     const party = this.plugin.activePlayers().map(f => Number(this.plugin.fm(f).level) || 1);
     const avg = party.length ? Math.round(party.reduce((a, b) => a + b, 0) / party.length) : 3;
     const form = c.createDiv({ cls: 'dms-form-grid' });
@@ -904,7 +904,7 @@ class MonsterBuilderModal extends Modal {
   }
   onOpen() {
     const c = this.contentEl; this.modalEl.addClass('dms-wide-modal', 'dms-builder-modal');
-    c.createEl('h3', { text: this.opts.file ? 'Edit statblock' : (this.villain ? 'New villain' : 'New monster') });
+    c.createEl('h3', { text: this.opts.file ? 'Edit statblock' : 'Monster/Villain builder' });
     const wrap = c.createDiv({ cls: 'dms-builder' });
     const form = wrap.createDiv({ cls: 'dms-builder-form' });
     this.previewEl = wrap.createDiv({ cls: 'dms-builder-preview' });
@@ -914,7 +914,7 @@ class MonsterBuilderModal extends Modal {
     const sec = t => { form.createDiv({ cls: 'dms-sec', text: t }); return form.createDiv({ cls: 'dms-form-grid' }); };
 
     let g = sec('Basics');
-    const kind = field(g, 'Kind', selectEl([['monster', 'Monster'], ['villain', 'Villain / bad guy']], this.villain ? 'villain' : 'monster'));
+    const kind = field(g, 'Kind', selectEl([['monster', 'Monster'], ['villain', 'Villain']], this.villain ? 'villain' : 'monster'));
     kind.addEventListener('change', () => { this.villain = kind.value === 'villain'; villainBox.style.display = this.villain ? '' : 'none'; });
     bind(field(g, 'Name', inputEl('text', sb.name, { placeholder: 'e.g. Captain Vex' })), 'name');
     bind(field(g, 'Size', selectEl(SIZES, sb.size)), 'size');
@@ -1123,16 +1123,15 @@ class SaveHelperModal extends Modal {
 
 Object.assign(DMStatblocksPlugin.prototype, {
   registerMonsterTools() {
-    this.addRibbonIcon('skull', 'Random monster', () => new RandomMonsterModal(this).open());
-    this.addCommand({ id: 'new-monster', name: 'Create monster (builder)', callback: () => new MonsterBuilderModal(this, null, {}).open() });
-    this.addCommand({ id: 'new-villain', name: 'Create villain / bad guy (builder)', callback: () => new MonsterBuilderModal(this, { alignment: 'Lawful Evil' }, { villain: true }).open() });
-    this.addCommand({ id: 'random-monster', name: 'Generate random monster…', callback: () => new RandomMonsterModal(this).open() });
+    this.addRibbonIcon('skull', 'Random monster/villain', () => new RandomMonsterModal(this).open());
+    this.addCommand({ id: 'new-monster', name: 'Monster/Villain builder', callback: () => new MonsterBuilderModal(this, null, {}).open() });
+    this.addCommand({ id: 'new-villain', name: 'Monster/Villain builder (start as villain)', callback: () => new MonsterBuilderModal(this, { alignment: 'Lawful Evil' }, { villain: true }).open() });
+    this.addCommand({ id: 'random-monster', name: 'Generate random monster/villain…', callback: () => new RandomMonsterModal(this).open() });
     this.addCommand({ id: 'edit-statblock', name: 'Edit this note\'s statblock in the builder', callback: () => { const f = this.app.workspace.getActiveFile(); if (f) this.openBuilderForFile(f.path); } });
     this.registerMarkdownCodeBlockProcessor('monster-tools', (src, el) => {
       lpSafe(el); const row = el.createDiv({ cls: 'dms-row dms-wrap dms-tools-block' });
-      btn(row, 'Build a monster', 'skull', () => new MonsterBuilderModal(this, null, {}).open(), 'mod-cta');
-      btn(row, 'Build a villain', 'crown', () => new MonsterBuilderModal(this, { alignment: 'Lawful Evil' }, { villain: true }).open());
-      btn(row, 'Random monster', 'dices', () => new RandomMonsterModal(this).open());
+      btn(row, 'Monster/Villain builder', 'skull', () => new MonsterBuilderModal(this, null, {}).open(), 'mod-cta');
+      btn(row, 'Random monster/villain', 'dices', () => new RandomMonsterModal(this).open());
     });
   },
   async openBuilderForFile(path) {
