@@ -914,7 +914,7 @@ class CountModal extends Modal {
 const BLANK = '```statblock\nname: New Creature\nsize: Medium\ntype: Humanoid\nalignment: Neutral\nac: 12\ninitiative: 1\nhp: 11\nhit_dice: 2d8 + 2\nspeed: 30 ft.\nstr: 10\ndex: 12\ncon: 12\nint: 10\nwis: 10\ncha: 10\nsaves: []\nskills: Perception +2\nsenses: Passive Perception 12\nlanguages: Common\ncr: 1/2\ntraits: []\nactions:\n  - name: Club\n    desc: "*Melee Attack Roll:* +2, reach 5 ft. *Hit:* 3 (1d4 + 1) Bludgeoning damage."\nbonus_actions: []\nreactions: []\n```\n';
 
 /* ================================================================== */
-/* Monster & villain builder + random monster generator               */
+/* Creature builder (monster, villain, NPC) + random creature generator               */
 /* ================================================================== */
 
 const CR_LIST = ['0', '1/8', '1/4', '1/2', ...Array.from({ length: 30 }, (_, i) => String(i + 1))];
@@ -1141,6 +1141,18 @@ function monsterNote(sb, extra) {
   return body;
 }
 
+function npcNote(sb, extra) {
+  const meta = sb._meta || {};
+  const q = v => yScalar(String(v || ''));
+  let fm = '---\ntype: npc\nrole: ' + q(extra.role) + '\nspecies: ' + q(sb.type && /humanoid/i.test(sb.type) ? (String(sb.type).match(/\(([^)]+)\)/) || [])[1] || '' : sb.type || '') + '\nlocation: ' + q(extra.location) + '\nfaction: ' + q(extra.faction) + '\nattitude: ' + (extra.attitude || 'indifferent') + '\nstatus: alive\nfirst_seen: ""\ncr: "' + (sb.cr ?? '') + '"\n';
+  fm += 'image: ' + (sb.image ? yScalar(sb.image) : '""') + '\ntags: [npc]\n---\n';
+  const clean = Object.assign({}, sb); delete clean._meta; delete clean._preview; delete clean._from; delete clean._artUrl;
+  let body = fm + '# ' + sb.name + '\n\n```portrait\n```\n\n> [!npc] Quick reference\n> **Role:** ' + (extra.role || '') + '\n> **Look:**\n> **Voice / mannerism:**\n> **Wants:** ' + (extra.wants || '') + '\n> **Fears:**\n\n## Description\n\n## Personality & roleplay notes\n\n## Secret\n> [!secret]\n> ' + (extra.secret || '') + '\n\n## Relationships\n-\n\n## Statblock\n' + statblockToYaml(clean) + '\n\n## Tactics\n' + (extra.tactics || meta.tactics || '') + '\n';
+  body += '\n## Threads\n*Session threads and follow-ups that link to this note.*\n```threads\nmentions: this\nfilter: all\n```\n';
+  body += '\n## Appears in\n```dm-list\nwhere: any\nfields: [type]\nempty: Not linked from any note yet.\n```\n';
+  return body;
+}
+
 /* ---------- small form helpers ---------- */
 function field(parent, label, el) { const w = parent.createDiv({ cls: 'dms-f' }); w.createEl('label', { text: label }); w.appendChild(el); return el; }
 function inputEl(type, value, attrs) { const i = document.createElement('input'); i.type = type; if (value != null) i.value = value; if (attrs) for (const k in attrs) i.setAttribute(k, attrs[k]); return i; }
@@ -1249,7 +1261,7 @@ class RandomMonsterModal extends Modal {
   constructor(plugin) { super(plugin.app); this.plugin = plugin; this.sb = null; }
   onOpen() {
     const c = this.contentEl; c.addClass('dms-gen-modal'); this.modalEl.addClass('dms-wide-modal');
-    c.createEl('h3', { text: 'Random monster/villain' });
+    c.createEl('h3', { text: 'Random creature' });
     const party = this.plugin.activePlayers().map(f => Number(this.plugin.fm(f).level) || 1);
     const avg = party.length ? Math.round(party.reduce((a, b) => a + b, 0) / party.length) : 3;
     const form = c.createDiv({ cls: 'dms-form-grid' });
@@ -1302,6 +1314,7 @@ class RandomMonsterModal extends Modal {
       actions.empty();
       btn(actions, 'Save to Bestiary', 'save', () => this.save(false), 'mod-cta');
       btn(actions, 'Save as villain', 'crown', () => this.save(true));
+      btn(actions, 'Save as NPC', 'user', () => this.save('npc'));
       btn(actions, 'Tweak in builder', 'pencil', () => { const sb = this.sb; this.close(); new MonsterBuilderModal(this.plugin, sb, {}).open(); });
       btn(actions, 'Add ' + n + ' to combat', 'swords', () => this.plugin.addMonster(this.sb, null, n));
     };
@@ -1309,13 +1322,13 @@ class RandomMonsterModal extends Modal {
     gen();
   }
   async save(villain) {
-    const f = await this.plugin.saveMonster(this.sb, { villain });
+    const f = villain === 'npc' ? await this.plugin.saveNpc(this.sb, {}) : await this.plugin.saveMonster(this.sb, { villain });
     if (f) { this.close(); this.app.workspace.getLeaf(false).openFile(f); }
   }
   onClose() { this.contentEl.empty(); }
 }
 
-/* ---------- Monster / villain builder ---------- */
+/* ---------- Creature builder (monster / villain / NPC) ---------- */
 class MonsterBuilderModal extends Modal {
   constructor(plugin, initial, opts) {
     super(plugin.app); this.plugin = plugin; this.opts = opts || {};
@@ -1323,11 +1336,12 @@ class MonsterBuilderModal extends Modal {
     this.sb = Object.assign(base, JSON.parse(JSON.stringify(initial || {})));
     ['traits', 'actions', 'bonus_actions', 'reactions', 'legendary_actions'].forEach(k => { this.sb[k] = asList(this.sb[k]); });
     if (!Array.isArray(this.sb.saves)) this.sb.saves = Object.keys(this.sb.saves || {});
-    this.villain = !!this.opts.villain; this.extra = { goal: '', lair: '', minions: '', weakness: '', tactics: (initial && initial._meta && initial._meta.tactics) || '', environment: (initial && initial._meta && initial._meta.environment) || [] };
+    this.kind = this.opts.kind || (this.opts.villain ? 'villain' : 'monster'); this.extra = { goal: '', lair: '', minions: '', weakness: '', role: '', location: '', faction: '', attitude: 'indifferent', wants: '', secret: '', tactics: (initial && initial._meta && initial._meta.tactics) || '', environment: (initial && initial._meta && initial._meta.environment) || [] };
   }
+  get villain() { return this.kind === 'villain'; }
   onOpen() {
     const c = this.contentEl; this.modalEl.addClass('dms-wide-modal', 'dms-builder-modal');
-    c.createEl('h3', { text: this.opts.file ? 'Edit statblock' : 'Monster/Villain builder' });
+    c.createEl('h3', { text: this.opts.file ? 'Edit statblock' : 'Creature builder' });
     const wrap = c.createDiv({ cls: 'dms-builder' });
     const form = wrap.createDiv({ cls: 'dms-builder-form' });
     this.previewEl = wrap.createDiv({ cls: 'dms-builder-preview' });
@@ -1338,13 +1352,14 @@ class MonsterBuilderModal extends Modal {
 
     this.renderImport(form);
     let g = sec('Basics');
-    const kind = field(g, 'Kind', selectEl([['monster', 'Monster'], ['villain', 'Villain']], this.villain ? 'villain' : 'monster'));
-    kind.addEventListener('change', () => { this.villain = kind.value === 'villain'; villainBox.style.display = this.villain ? '' : 'none'; });
+    const kind = field(g, 'Kind', selectEl([['monster', 'Monster'], ['villain', 'Villain'], ['npc', 'NPC']], this.kind));
+    if (this.opts.file) kind.disabled = this.kind === 'npc' || !!this.opts.lockKind;
+    kind.addEventListener('change', () => { this.kind = kind.value; if (this.kind === 'npc' && sb.alignment === 'Neutral Evil' && alignIn) { sb.alignment = 'Neutral'; alignIn.value = 'Neutral'; upd(); } this.syncKind && this.syncKind(); });
     bind(field(g, 'Name', inputEl('text', sb.name, { placeholder: 'e.g. Captain Vex' })), 'name');
     bind(field(g, 'Size', selectEl(SIZES, sb.size)), 'size');
     bind(field(g, 'Creature type', inputEl('text', sb.type, { list: 'dms-ctypes' })), 'type');
     const dl = g.createEl('datalist', { attr: { id: 'dms-ctypes' } }); CREATURE_TYPES.forEach(t => dl.createEl('option', { value: t }));
-    bind(field(g, 'Alignment', inputEl('text', sb.alignment)), 'alignment');
+    const alignIn = bind(field(g, 'Alignment', inputEl('text', sb.alignment)), 'alignment');
     const crS = bind(field(g, 'Challenge Rating', selectEl(CR_LIST, String(sb.cr))), 'cr');
     const crInfo = g.createDiv({ cls: 'dms-muted dms-span2' });
     const suggest = g.createDiv({ cls: 'dms-span2' });
@@ -1420,7 +1435,14 @@ class MonsterBuilderModal extends Modal {
       draw();
     }
 
-    const villainBox = form.createDiv(); villainBox.style.display = this.villain ? '' : 'none';
+    const npcBox = form.createDiv();
+    npcBox.createDiv({ cls: 'dms-sec', text: 'NPC profile' });
+    const ng = npcBox.createDiv({ cls: 'dms-form-grid' });
+    for (const [k, l, ph] of [['role', 'Role / occupation', 'Innkeeper, guard captain, sage…'], ['location', 'Location', '[[Briarford]]'], ['faction', 'Faction', '[[The Ashen Hand]]'], ['wants', 'Wants', 'What do they want?'], ['secret', 'Secret', 'What are they hiding?']]) {
+      const i = field(ng, l, inputEl('text', this.extra[k], { placeholder: ph })); i.addEventListener('input', () => { this.extra[k] = i.value; });
+    }
+    const att = field(ng, 'Attitude', selectEl([['friendly', 'Friendly'], ['indifferent', 'Indifferent'], ['hostile', 'Hostile']], this.extra.attitude)); att.addEventListener('change', () => { this.extra.attitude = att.value; });
+    const villainBox = form.createDiv();
     villainBox.createDiv({ cls: 'dms-sec', text: 'Villain profile' });
     const vg = villainBox.createDiv({ cls: 'dms-form-grid' });
     for (const [k, l, ph] of [['goal', 'Goal', 'What do they want?'], ['lair', 'Lair / base', 'Link a place: [[The Old Mill]]'], ['minions', 'Minions', '[[Cultist]] ×4'], ['weakness', 'Weakness', 'What can the party exploit?']]) {
@@ -1430,7 +1452,16 @@ class MonsterBuilderModal extends Modal {
     const tac = form.createEl('textarea', { cls: 'dms-ta', attr: { rows: 2, placeholder: 'How does it fight?' } }); tac.value = this.extra.tactics; tac.addEventListener('input', () => { this.extra.tactics = tac.value; });
 
     const foot = c.createDiv({ cls: 'dms-row dms-wrap dms-builder-foot' });
-    btn(foot, this.opts.file ? 'Save changes' : 'Save to Bestiary', 'save', () => this.save(), 'mod-cta');
+    const saveBtn = btn(foot, '', 'save', () => this.save(), 'mod-cta');
+    this.syncKind = () => {
+      villainBox.style.display = this.kind === 'villain' ? '' : 'none';
+      npcBox.style.display = this.kind === 'npc' && !this.opts.file ? '' : 'none';
+      const lbl = this.opts.file ? 'Save changes' : this.kind === 'npc' ? 'Save NPC' : 'Save to Bestiary';
+      const t = saveBtn.querySelector('.dms-btn-label') || [...saveBtn.childNodes].reverse().find(n => n.nodeType === 3 || (n.tagName === 'SPAN' && !n.querySelector('svg') && !n.classList.contains('dms-ic')));
+      if (t) t.textContent = lbl; else saveBtn.appendText(lbl);
+      saveBtn.setAttr('aria-label', lbl);
+    };
+    this.syncKind();
     btn(foot, 'Add to combat', 'swords', () => this.plugin.addMonster(this.finalSb(), this.opts.file || null, 1));
     btn(foot, 'Copy statblock', 'copy', () => { try { navigator.clipboard.writeText(statblockToYaml(this.finalSb())); new Notice('Statblock copied'); } catch (e) { new Notice('Copy not available'); } });
     btn(foot, 'Cancel', null, () => this.close());
@@ -1456,7 +1487,7 @@ class MonsterBuilderModal extends Modal {
   }
   async save() {
     if (this.pendingArt) {
-      const where = this.opts.file || ((this.plugin.settings.bestiaryFolder || 'Bestiary') + '/' + ((this.sb.name || 'creature').trim() || 'creature') + '.md');
+      const where = this.opts.file || ((this.kind === 'npc' ? this.plugin.npcFolder() : (this.plugin.settings.bestiaryFolder || 'Bestiary')) + '/' + ((this.sb.name || 'creature').trim() || 'creature') + '.md');
       try { const f = await saveImageToVault(this.app, this.pendingArt.blob, ((this.sb.name || 'creature').trim() || 'creature') + ' art.' + (IMG_MIME_EXT[this.pendingArt.blob.type] || (String(this.pendingArt.name).match(/\.([a-z0-9]+)$/i) || [, 'png'])[1]), where); this.sb.image = imageLinkFor(this.app, f, where); this.pendingArt = null; }
       catch (e) { new Notice('Could not save the art: ' + e.message); }
     }
@@ -1467,10 +1498,11 @@ class MonsterBuilderModal extends Modal {
       const text = await this.app.vault.read(f);
       const out = text.match(/```statblock[^\n]*\n[\s\S]*?```/) ? text.replace(/```statblock[^\n]*\n[\s\S]*?```/, () => statblockToYaml(sb)) : text.replace(/\s*$/, '\n\n') + statblockToYaml(sb) + '\n';
       await this.app.vault.modify(f, out);
-      if (this.plugin.fm(f).type === 'monster' || this.villain) await this.app.fileManager.processFrontMatter(f, fm => { if (sb.image) fm.image = sb.image; else delete fm.image; fm.cr = String(sb.cr); fm.creature_type = String(sb.type || '').split(' ')[0]; if (this.villain) { fm.villain = true; } });
+      if (['monster', 'npc'].includes(this.plugin.fm(f).type) || this.villain) await this.app.fileManager.processFrontMatter(f, fm => { if (sb.image) fm.image = sb.image; else delete fm.image; fm.cr = String(sb.cr); if (fm.type !== 'npc') fm.creature_type = String(sb.type || '').split(' ')[0]; if (this.villain) { fm.villain = true; } });
       new Notice('Statblock updated: ' + sb.name); this.close(); return;
     }
-    const f = await this.plugin.saveMonster(Object.assign(sb, { _meta: { tactics: this.extra.tactics, environment: this.extra.environment } }), Object.assign({ villain: this.villain }, this.extra));
+    const withMeta = Object.assign(sb, { _meta: { tactics: this.extra.tactics, environment: this.extra.environment } });
+    const f = this.kind === 'npc' ? await this.plugin.saveNpc(withMeta, this.extra) : await this.plugin.saveMonster(withMeta, Object.assign({ villain: this.villain }, this.extra));
     if (f) { this.close(); this.app.workspace.getLeaf(false).openFile(f); }
   }
   onClose() { this.contentEl.empty(); }
@@ -1486,7 +1518,7 @@ class MonsterBuilderModal extends Modal {
       btn(col, 'Upload image…', 'upload', async () => { const fs = await chooseImageFiles(false); if (fs[0]) setFile(fs[0]); });
       btn(col, 'From vault…', 'image', () => new ImageSuggestModal(this.app, f => { this.pendingArt = null; this.sb.image = imageLinkFor(this.app, f, this.opts.file || ''); draw(); this.refresh(); }).open());
       if (art) btn(col, 'Remove', 'trash-2', () => { this.pendingArt = null; this.sb.image = ''; draw(); this.refresh(); });
-      col.createDiv({ cls: 'dms-muted dms-small-note', text: art ? (this.pendingArt ? 'Saved to your vault when you save the creature.' : String(this.sb.image)) : 'Shown on the statblock. Monster art, a villain portrait or a token.' });
+      col.createDiv({ cls: 'dms-muted dms-small-note', text: art ? (this.pendingArt ? 'Saved to your vault when you save the creature.' : String(this.sb.image)) : 'Shown on the statblock (and as the NPC portrait). Monster art, a villain portrait or a token.' });
     };
     const setFile = f => { this.pendingArt = { blob: f, name: f.name || 'art.png', url: URL.createObjectURL(f) }; this.sb.image = ''; draw(); this.refresh(); };
     this.drawArt = draw; this.setArtFile = setFile;
@@ -1657,16 +1689,17 @@ class SaveHelperModal extends Modal {
 
 Object.assign(DMStatblocksPlugin.prototype, {
   registerMonsterTools() {
-    this.addRibbonIcon('skull', 'Random monster/villain', () => new RandomMonsterModal(this).open());
-    this.addCommand({ id: 'new-monster', name: 'Monster/Villain builder', callback: () => new MonsterBuilderModal(this, null, {}).open() });
-    this.addCommand({ id: 'import-monster', name: 'Import a monster/villain from an image or text', callback: () => new MonsterBuilderModal(this, null, { importOpen: true }).open() });
-    this.addCommand({ id: 'new-villain', name: 'Monster/Villain builder (start as villain)', callback: () => new MonsterBuilderModal(this, { alignment: 'Lawful Evil' }, { villain: true }).open() });
-    this.addCommand({ id: 'random-monster', name: 'Generate random monster/villain…', callback: () => new RandomMonsterModal(this).open() });
+    this.addRibbonIcon('skull', 'Random creature', () => new RandomMonsterModal(this).open());
+    this.addCommand({ id: 'new-monster', name: 'Creature builder (monster, villain or NPC)', callback: () => new MonsterBuilderModal(this, null, {}).open() });
+    this.addCommand({ id: 'import-monster', name: 'Import a creature from an image or text', callback: () => new MonsterBuilderModal(this, null, { importOpen: true }).open() });
+    this.addCommand({ id: 'new-villain', name: 'Creature builder (start as villain)', callback: () => new MonsterBuilderModal(this, { alignment: 'Lawful Evil' }, { villain: true }).open() });
+    this.addCommand({ id: 'new-npc-statblock', name: 'Creature builder (start as NPC with a statblock)', callback: () => new MonsterBuilderModal(this, { alignment: 'Neutral', type: 'Humanoid' }, { kind: 'npc' }).open() });
+    this.addCommand({ id: 'random-monster', name: 'Generate random creature…', callback: () => new RandomMonsterModal(this).open() });
     this.addCommand({ id: 'edit-statblock', name: 'Edit this note\'s statblock in the builder', callback: () => { const f = this.app.workspace.getActiveFile(); if (f) this.openBuilderForFile(f.path); } });
     this.registerMarkdownCodeBlockProcessor('monster-tools', (src, el) => {
       lpSafe(el); const row = el.createDiv({ cls: 'dms-row dms-wrap dms-tools-block' });
-      btn(row, 'Monster/Villain builder', 'skull', () => new MonsterBuilderModal(this, null, {}).open(), 'mod-cta');
-      btn(row, 'Random monster/villain', 'dices', () => new RandomMonsterModal(this).open());
+      btn(row, 'Creature builder', 'skull', () => new MonsterBuilderModal(this, null, {}).open(), 'mod-cta');
+      btn(row, 'Random creature', 'dices', () => new RandomMonsterModal(this).open());
     });
   },
   async openBuilderForFile(path) {
@@ -1675,7 +1708,21 @@ Object.assign(DMStatblocksPlugin.prototype, {
     const sb = extractStatblock(await this.app.vault.read(f));
     if (!sb) { new Notice('No ```statblock block in this note.'); return; }
     if (sb.monster) { new Notice('This block reuses “' + sb.monster + '” — edit that note instead.'); return; }
-    new MonsterBuilderModal(this, sb, { file: f.path, villain: !!this.fm(f).villain }).open();
+    new MonsterBuilderModal(this, sb, { file: f.path, kind: this.fm(f).type === 'npc' ? 'npc' : this.fm(f).villain ? 'villain' : 'monster' }).open();
+  },
+  npcFolder() {
+    const cx = this.app.plugins && this.app.plugins.plugins && this.app.plugins.plugins['dm-codex'];
+    return (cx && cx.settings && cx.settings.folders && cx.settings.folders.npc) || 'World/NPCs';
+  },
+  async saveNpc(sb, extra) {
+    const folder = this.npcFolder();
+    const parts = folder.split('/'); for (let k = 1; k <= parts.length; k++) { const pth = parts.slice(0, k).join('/'); if (!this.app.vault.getAbstractFileByPath(pth)) { try { await this.app.vault.createFolder(pth); } catch (e) {} } }
+    const base = String(sb.name || 'Unnamed NPC').replace(/[\\/:*?"<>|#^\[\]]/g, '').trim();
+    let path = folder + '/' + base + '.md', i = 2;
+    while (this.app.vault.getAbstractFileByPath(path)) path = folder + '/' + base + ' ' + (i++) + '.md';
+    const f = await this.app.vault.create(path, npcNote(sb, extra || {}));
+    new Notice('NPC created: ' + f.basename);
+    return f;
   },
   async saveMonster(sb, extra) {
     const folder = this.settings.bestiaryFolder || 'Bestiary';
@@ -1721,7 +1768,7 @@ class EncounterBuilderModal extends Modal {
     this.e.monsters = this.e.monsters.map(m => Object.assign({}, m));
   }
   bestiary() {
-    return this.app.vault.getMarkdownFiles().filter(f => !this.plugin.isTemplate(f) && this.plugin.fm(f).type === 'monster');
+    return this.app.vault.getMarkdownFiles().filter(f => { if (this.plugin.isTemplate(f)) return false; const fm = this.plugin.fm(f); return fm.type === 'monster' || (fm.type === 'npc' && fm.cr != null && String(fm.cr) !== ''); });
   }
   monsterInfo(name) {
     const f = this.app.metadataCache.getFirstLinkpathDest(name, '');
@@ -1814,7 +1861,7 @@ class EncounterBuilderModal extends Modal {
   suggest() {
     const levels = this.partyLevels(); if (!levels.length) { new Notice('Set party levels first.'); return; }
     const budget = difficultyFor(0, levels).budget[['Low', 'Moderate', 'High'].indexOf(this.e.target)];
-    let pool = this.bestiary().map(f => ({ f, ...this.monsterInfo(f.basename) })).filter(x => x.xp > 0 && x.xp <= budget && !this.plugin.fm(x.f).villain);
+    let pool = this.bestiary().map(f => ({ f, ...this.monsterInfo(f.basename) })).filter(x => x.xp > 0 && x.xp <= budget && !this.plugin.fm(x.f).villain && this.plugin.fm(x.f).type === 'monster');
     if (this.e.environment !== 'Any') { const p2 = pool.filter(x => x.env.includes(this.e.environment) || x.env.includes('any')); if (p2.length) pool = p2; }
     if (!pool.length) { new Notice('No Bestiary creature fits that budget — try “Generate new monster”.'); return; }
     pool.sort(() => Math.random() - 0.5);

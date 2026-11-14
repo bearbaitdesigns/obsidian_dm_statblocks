@@ -11,7 +11,7 @@ Works in **Live Preview**. Pairs with **[DM Codex](https://github.com/bearbaitde
 
 ## Importing statblocks and art
 
-The Monster/Villain builder can **import a statblock** from pasted text or from a picture (screenshot or photo), and add **art** that shows on the statblock. Imported art is saved to your attachments folder.
+The Creature builder (Kind: Monster, Villain or NPC) can **import a statblock** from pasted text or from a picture (screenshot or photo), and add **art** that shows on the statblock. Imported art is saved to your attachments folder.
 
 **Network use:** reading text from a picture uses [Tesseract.js](https://github.com/naptha/tesseract.js) (OCR). It is downloaded from `cdn.jsdelivr.net` the first time you use it, and only after you agree. Your image is processed on your device and is never uploaded. You can turn this off in Settings → DM Statblocks; pasting text works offline.
 
