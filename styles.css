@@ -76,8 +76,9 @@
 .dms-save-ck { display:flex; align-items:center; gap:3px; }
 .dms-ta { width:100%; font-family: inherit; font-size: var(--font-ui-small); background: var(--background-primary-alt); color: var(--text-normal); border:1px solid var(--background-modifier-border); border-radius:6px; padding:5px 7px; resize: vertical; }
 .dms-entries { display:flex; flex-direction:column; gap:6px; }
-.dms-entry-edit { display:grid; grid-template-columns: 150px 1fr 32px; gap:6px; align-items:start; }
-@media (max-width: 520px) { .dms-entry-edit { grid-template-columns: 1fr 32px; } .dms-entry-edit .dms-ta { grid-column: 1 / 2; } }
+.dms-entry-edit { display:grid; grid-template-columns: 150px 1fr 118px 32px; gap:6px; align-items:start; }
+.dms-move { font-size: var(--font-ui-smaller); max-width:118px; }
+@media (max-width: 520px) { .dms-entry-edit { grid-template-columns: 1fr 110px 32px; } .dms-entry-edit .dms-ta { grid-column: 1 / -1; } }
 .dms-builder-foot { margin-top:12px; border-top:1px solid var(--background-modifier-border); padding-top:10px; }
 .dms-gen-summary { margin:10px 0 6px; }
 .dms-gen-preview { margin:8px 0; }

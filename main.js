@@ -215,88 +215,173 @@ class ImageLightbox extends Modal {
 /* ================================================================== */
 /* Import a statblock from text (pasted, or read from an image)        */
 /* ================================================================== */
-const SB_SECTIONS = { 'traits': 'traits', 'actions': 'actions', 'bonus actions': 'bonus_actions', 'reactions': 'reactions', 'legendary actions': 'legendary_actions', 'lair actions': 'lair_actions', 'mythic actions': 'legendary_actions' };
-const SB_LABELS = [
-  ['saves', /^(?:saving throws?|saves)\b\s*:?\s*/i],
-  ['skills', /^skills?\b\s*:?\s*/i],
-  ['vulnerabilities', /^(?:damage\s+)?vulnerabilit(?:y|ies)\b\s*:?\s*/i],
-  ['resistances', /^(?:damage\s+)?resistances?\b\s*:?\s*/i],
-  ['immunities', /^(?:damage\s+)?immunit(?:y|ies)\b\s*:?\s*/i],
-  ['cond_immunities', /^condition\s+immunit(?:y|ies)\b\s*:?\s*/i],
-  ['gear', /^gear\b\s*:?\s*/i],
-  ['senses', /^senses?\b\s*:?\s*/i],
-  ['languages', /^languages?\b\s*:?\s*/i],
-  ['speed', /^speed\b\s*:?\s*/i],
-];
+// Section headings, matched fuzzily (OCR turns "ACTIONS" into "ACTlONS", "Act ions", "ACTIONS ____" …)
+const SB_HEADINGS = [['legendaryactions', 'legendary_actions'], ['mythicactions', 'legendary_actions'], ['bonusactions', 'bonus_actions'], ['lairactions', 'lair_actions'], ['regionaleffects', 'regional'], ['reactions', 'reactions'], ['actions', 'actions'], ['traits', 'traits'], ['specialtraits', 'traits']];
+// Header labels, tolerant of common OCR slips (5↔s, 1/l↔i, q↔g)
+const SB_LABEL_RE = /(^|[\s;,.|])((?:Saving\s+Throws?)|(?:S[ae]ves)|(?:Ski[l1I|][l1I|]s?)|(?:Damage\s+Vu[l1I]nerabi[l1I]ities)|(?:Vu[l1I]nerabi[l1I]it(?:y|i[e3]s))|(?:Damage\s+Resistances?)|(?:Resistances?)|(?:Damage\s+[Il1]mmunit(?:y|i[e3]s))|(?:Condition\s+[Il1]mmunit(?:y|i[e3]s))|(?:[Il1]mmunit(?:y|i[e3]s))|(?:G[e3]ar)|(?:S[e3]ns[e3][s5])|(?:Langua[gq][e3][s5]?)|(?:Cha[l1I][l1I][e3]ng[e3](?:\s+Rating)?)|(?:Proficiency\s+Bonus)|(?:Sp[e3][e3]d)|(?:Armou?r\s+C[l1I]ass)|(?:Hit\s+Points)|(?:[Il1]nitiative)|CR|AC|HP|PB)(?=[\s:]|$)/g;
+const LABEL_KEY = l => {
+  const s = l.toLowerCase().replace(/[1|]/g, 'l').replace(/3/g, 'e').replace(/5/g, 's').replace(/\s+/g, ' ');
+  if (/^sav/.test(s)) return 'saves';
+  if (/^skil/.test(s)) return 'skills';
+  if (/vuln/.test(s)) return 'vulnerabilities';
+  if (/resist/.test(s)) return 'resistances';
+  if (/^condition/.test(s)) return 'cond_immunities';
+  if (/mmunit/.test(s)) return 'immunities';
+  if (/^ge?ar/.test(s)) return 'gear';
+  if (/^sens/.test(s)) return 'senses';
+  if (/^langua/.test(s)) return 'languages';
+  if (/^chal|^cr$/.test(s)) return 'cr';
+  if (/^proficiency|^pb$/.test(s)) return 'pb';
+  if (/^spe/.test(s)) return 'speed';
+  if (/^armou?r|^ac$/.test(s)) return 'ac';
+  if (/^hit points|^hp$/.test(s)) return 'hp';
+  if (/nitiative/.test(s)) return 'initiative';
+  return null;
+};
 const ABIL_ALIASES = { str: 'str', strength: 'str', dex: 'dex', dexterity: 'dex', con: 'con', constitution: 'con', int: 'int', intelligence: 'int', wis: 'wis', wisdom: 'wis', cha: 'cha', charisma: 'cha' };
-const ENTRY_STOP = /^(hit|miss|failure|success|trigger|response|failure or success|first failure|second failure|melee|ranged|each|if|on|the|a|an|it|when|while|until|at|this|that|in)\b/i;
+const ENTRY_STOP = /^(hit|miss|failure|success|trigger|response|failure or success|first failure|second failure|melee|ranged|each|if|on|the|a|an|it|its|when|while|until|at|this|that|in|or|and|with|for|to|as|dc|ft|creatures?|target|damage|saving throw|attack roll)\b/i;
+const ACTION_HINT = /(Attack Roll|Weapon Attack|Spell Attack|Saving Throw):|\bHit:|\bto hit\b|\(Recharge\b|\bRecharges?\b|^\s*The [\w\s']+ makes (?:two|three|four|five|\d)/i;
+
+function levenshtein(a, b) {
+  if (a === b) return 0; if (!a.length) return b.length; if (!b.length) return a.length;
+  let prev = Array.from({ length: b.length + 1 }, (_, i) => i);
+  for (let i = 1; i <= a.length; i++) {
+    const cur = [i];
+    for (let j = 1; j <= b.length; j++) cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+    prev = cur;
+  }
+  return prev[b.length];
+}
+const normHeading = s => s.toLowerCase().replace(/[0]/g, 'o').replace(/[1|!]/g, 'i').replace(/5/g, 's').replace(/[^a-z]/g, '').replace(/l(?=ons?$)/, 'i');
+/** If a line is a section heading (possibly with junk, or followed by the first entry), return { key, rest }. */
+function sectionHeading(line) {
+  const raw = line.replace(/[_=~—\-.:·•*#]+\s*$/, '').trim();
+  const tryMatch = s => {
+    const n = normHeading(s); if (n.length < 5 || n.length > 20) return null;
+    for (const [h, key] of SB_HEADINGS) { const d = levenshtein(n, h); if (d === 0 || d <= (h.length >= 12 ? 2 : 1)) return key; }
+    return null;
+  };
+  if (raw.length <= 26) { const k = tryMatch(raw); if (k) return { key: k, rest: '' }; }
+  // "ACTIONS Multiattack. The dragon …" — an all-caps heading glued to the next line
+  const m = /^([A-Z0-9|!]{3,}(?:\s+[A-Z0-9|!]{3,})?)\s+(.+)$/.exec(raw);
+  if (m) { const k = tryMatch(m[1]); if (k) return { key: k, rest: m[2] }; }
+  return null;
+}
 
 function cleanOcrText(t) {
   return String(t || '')
     .replace(/\r/g, '')
-    .replace(/[‐‑‒–—―−]/g, m => (m === '—' || m === '―' ? '—' : '-'))
-    .replace(/[’‘`]/g, "'").replace(/[“”]/g, '"')
-    .replace(/ /g, ' ').replace(/[ \t]+/g, ' ')
-    .replace(/(\w)-\n(\w)/g, '$1$2')               // re-join hyphenated words
-    .replace(/\bl(\d)\b/g, '1$1').replace(/\b(\d)l\b/g, '$11') // l ↔ 1 slips
-    .replace(/\(\s*([+-])\s*(\d+)\s*\)/g, '($1$2)');
+    .replace(/[‐‑‒–―−]/g, '-').replace(/—/g, '—')
+    .replace(/[’‘`´]/g, "'").replace(/[“”„]/g, '"')
+    .replace(/[   ]/g, ' ').replace(/[ \t]+/g, ' ')
+    .replace(/ﬁ/g, 'fi').replace(/ﬂ/g, 'fl')
+    .replace(/(\w)-\n(\w)/g, '$1$2')                          // re-join hyphenated words
+    .replace(/\b(\d+)\s*d\s*(\d+)\b/g, '$1d$2')                 // "2 d6" → "2d6"
+    .replace(/\(\s*([+-])\s*(\d+)\s*\)/g, '($1$2)')
+    .replace(/\bfl\.(?=\s|,|;|$)/g, 'ft.').replace(/\bf[it]\.(?=\s|,|;|$)/g, 'ft.');
 }
-function titleCase(s) { return s.toLowerCase().replace(/\b([a-z])/g, c => c.toUpperCase()).replace(/\b(Of|The|And|In|On|A|An)\b/g, (w, x, i) => i ? w.toLowerCase() : w); }
+function titleCase(s) { return s.toLowerCase().replace(/\b([a-z])/g, c => c.toUpperCase()).replace(/\b(Of|The|And|In|On|A|An|Or)\b/g, (w, x, i) => i ? w.toLowerCase() : w); }
 function italicizeLabels(desc) {
-  return desc
-    .replace(/(^|\s)(Melee or Ranged Attack Roll|Melee Attack Roll|Ranged Attack Roll|Melee Weapon Attack|Ranged Weapon Attack|Melee Spell Attack|Ranged Spell Attack|(?:Strength|Dexterity|Constitution|Intelligence|Wisdom|Charisma) Saving Throw|Hit|Miss|Failure or Success|First Failure|Second Failure|Failure|Success|Trigger|Response):(?!\*)/g, '$1*$2:*');
+  return desc.replace(/(^|\s)(Melee or Ranged Attack Roll|Melee Attack Roll|Ranged Attack Roll|Melee Weapon Attack|Ranged Weapon Attack|Melee or Ranged Weapon Attack|Melee Spell Attack|Ranged Spell Attack|(?:Strength|Dexterity|Constitution|Intelligence|Wisdom|Charisma) Saving Throw|Hit|Miss|Failure or Success|First Failure|Second Failure|Failure|Success|Trigger|Response):(?!\*)/g, '$1*$2:*');
+}
+/** "Name. Description" (also "Name (Recharge 5-6). …", "Name (3/Day). …", "Name (Costs 2 Actions). …") */
+function entryStart(l) {
+  const m = /^([A-Z][A-Za-z'\-]*(?:\s+(?:[A-Za-z'\-]+|\d+))*?)(\s*\([^)]{1,40}\))?\s*([.:])\s+(.+)$/.exec(l);
+  if (!m) return null;
+  const base = m[1].trim(), words = base.split(/\s+/);
+  if (words.length > 6 || ENTRY_STOP.test(base)) return null;
+  if (/(Saving Throw|Attack Roll|Weapon Attack|Spell Attack|Action Uses|Hit Points|Armor Class)$/i.test(base)) return null;
+  if (m[3] === ':' && (!/^[A-Z]/.test(m[4]) || (words.length === 1 && !m[2]))) return null;
+  const caps = words.filter(w => /^[A-Z0-9(]/.test(w)).length;
+  if (caps < Math.ceil(words.length / 2)) return null;
+  return { name: (base + (m[2] || '')).trim(), desc: m[4] };
 }
 
 /** Parse a statblock written as plain text (2024 or 2014 layout, OCR noise tolerated). */
 function parseStatblockText(raw) {
   const text = cleanOcrText(raw);
-  const lines = text.split('\n').map(l => l.trim()).filter(l => l && !/^[-—_=~.·•]+$/.test(l));
+  const lines = text.split('\n').map(l => l.trim())
+    .filter(l => l && /[A-Za-z0-9]/.test(l) && !/^[-—_=~.·•|]+$/.test(l) && !/^\d{1,3}$/.test(l) && !/^(chapter|monster manual|appendix)\b/i.test(l));
   const sb = { saves: [], traits: [], actions: [], bonus_actions: [], reactions: [], legendary_actions: [] };
-  const found = [];
+  const found = [], notes = [];
   if (!lines.length) return { sb, found, warnings: ['No text to read.'] };
-  const sizeRe = /^(tiny|small|medium|large|huge|gargantuan)(?:\s+or\s+(?:tiny|small|medium|large|huge|gargantuan))?\s+(.+?)(?:,\s*(.+))?$/i;
+  const sizeRe = /^(tiny|small|medium|large|huge|gargantuan)(?:\s+or\s+(?:tiny|small|medium|large|huge|gargantuan))?\s+([^,]+?)(?:\s*,\s*(.+))?$/i;
+
+  // ---- name + size/type/alignment
   let i = 0;
-  // name: first line that isn't the size/type line
-  const sizeIdx = lines.findIndex(l => sizeRe.test(l) && l.length < 90);
+  const sizeIdx = lines.slice(0, 6).findIndex(l => sizeRe.test(l) && l.length < 90);
   const nameLine = sizeIdx > 0 ? lines[sizeIdx - 1] : sizeIdx === 0 ? '' : lines[0];
   if (nameLine) { sb.name = /[a-z]/.test(nameLine) ? nameLine : titleCase(nameLine); found.push('name'); }
   if (sizeIdx >= 0) {
     const m = sizeRe.exec(lines[sizeIdx]);
-    sb.size = titleCase(m[1]); sb.type = m[2].trim().replace(/\s*\(.*?\)\s*$/, s => s); if (m[3]) sb.alignment = titleCase(m[3].trim()).replace(/\bOr\b/g, 'or');
-    sb.type = sb.type.replace(/^(\w)/, c => c.toUpperCase()); found.push('size & type');
-    i = sizeIdx + 1;
+    sb.size = titleCase(m[1]); sb.type = m[2].trim().replace(/^(\w)/, c => c.toUpperCase());
+    if (m[3]) sb.alignment = titleCase(m[3].trim());
+    found.push('size & type'); i = sizeIdx + 1;
   } else i = nameLine ? 1 : 0;
 
-  // header block: everything up to the first section heading / first "Name. text" entry after CR
-  const isHeading = l => SB_SECTIONS[l.toLowerCase().replace(/[:.]$/, '')] != null;
-  let headerEnd = lines.length;
-  for (let k = i; k < lines.length; k++) { if (isHeading(lines[k])) { headerEnd = k; break; } }
-  let crLine = -1;
-  for (let k = i; k < headerEnd; k++) if (/^(?:cr|challenge)\b/i.test(lines[k])) { crLine = k; break; }
-  if (crLine >= 0 && headerEnd === lines.length) headerEnd = crLine + 1; // 2014: traits follow CR without a heading
-  else if (crLine >= 0 && crLine + 1 < headerEnd) {                      // proficiency line etc. may sit between CR and heading
-    let k = crLine + 1; while (k < headerEnd && /^(proficiency bonus|pb)\b/i.test(lines[k])) k++;
-    if (k < headerEnd) { headerEnd = k; }
+  // ---- where does the header (AC … CR) end and the body (traits/actions) begin?
+  let bodyStart = -1;
+  for (let k = i; k < lines.length; k++) {
+    if (sectionHeading(lines[k])) { bodyStart = k; break; }
+    if (/^(?:CR|Cha[l1I][l1I]enge)\b/i.test(lines[k]) || /(?:^|\s)(?:CR|Challenge)\s+(?:\d+\/\d+|\d+|[½¼⅛])\s*\(/i.test(lines[k])) {
+      bodyStart = k + 1;
+      while (bodyStart < lines.length && /^(proficiency bonus|pb)\b/i.test(lines[bodyStart])) bodyStart++;
+      break;
+    }
   }
-  const header = lines.slice(i, headerEnd).join('\n');
-  const flat = header.replace(/\n/g, ' ');
+  if (bodyStart < 0) {
+    // no CR line and no heading: the body starts at the first "Name. text" line after the ability scores
+    const abil = lines.findIndex((l, k) => k >= i && /\b(STR|DEX|CON|INT|WIS|CHA)\b/.test(l));
+    for (let k = Math.max(i, abil + 1); k < lines.length; k++) { const e = entryStart(lines[k]); if (e && e.desc.length > 15 && !SB_LABEL_RE.test(' ' + lines[k].split(/[.:]/)[0])) { bodyStart = k; break; } SB_LABEL_RE.lastIndex = 0; }
+    SB_LABEL_RE.lastIndex = 0;
+    if (bodyStart < 0) bodyStart = lines.length;
+  }
+  const headerLines = lines.slice(i, bodyStart);
+  const flat = headerLines.join(' ');
+
+  // ---- labelled header fields: split the header stream at each label (labels can share a line or wrap)
+  const fields = {}; const marks = [];
+  SB_LABEL_RE.lastIndex = 0; let mm;
+  while ((mm = SB_LABEL_RE.exec(flat))) { const key = LABEL_KEY(mm[2]); if (key) marks.push({ key, start: mm.index + mm[1].length, valStart: mm.index + mm[0].length }); }
+  // ability-table words end a field too
+  const abilMarks = [...flat.matchAll(/\b(STR|DEX|CON|INT|WIS|CHA|MOD|SAVE)\b/g)].map(x => x.index);
+  marks.forEach((mk, k) => {
+    let end = k + 1 < marks.length ? marks[k + 1].start : flat.length;
+    const ab = abilMarks.find(x => x > mk.valStart && x < end); if (ab != null && !['senses', 'languages', 'skills', 'saves'].includes(mk.key)) end = ab;
+    if (ab != null && mk.key === 'speed') end = ab;
+    const v = flat.slice(mk.valStart, end).replace(/^\s*:?\s*/, '').replace(/\s+/g, ' ').trim();
+    if (fields[mk.key] == null) fields[mk.key] = v;
+  });
 
   let m;
-  if ((m = /\b(?:AC|Armou?r Class)\s*:?\s*(\d+)(\s*\([^)]*\))?/i.exec(flat))) { sb.ac = Number(m[1]); found.push('AC'); }
-  if ((m = /\bInitiative\s*:?\s*([+-]?\d+)/i.exec(flat))) { sb.initiative = Number(m[1]); found.push('initiative'); }
-  if ((m = /\b(?:HP|Hit Points)\s*:?\s*(\d+)\s*(?:\(([^)]+)\))?/i.exec(flat))) { sb.hp = Number(m[1]); if (m[2]) sb.hit_dice = m[2].replace(/\s*([+-])\s*/g, ' $1 ').replace(/-/g, '−').replace(/\s+/g, ' ').trim(); found.push('HP'); }
-  if ((m = /\b(?:CR|Challenge(?: Rating)?)\s*:?\s*(\d+\s*\/\s*\d+|\d+|[½¼⅛])/i.exec(flat))) { sb.cr = m[1].replace(/\s/g, '').replace('½', '1/2').replace('¼', '1/4').replace('⅛', '1/8'); found.push('CR'); }
+  if (fields.ac && (m = /^(\d+)/.exec(fields.ac))) { sb.ac = Number(m[1]); found.push('AC'); }
+  if (fields.initiative && (m = /^([+-]?\s?\d+)/.exec(fields.initiative))) { sb.initiative = Number(m[1].replace(/\s/g, '')); found.push('initiative'); }
+  if (fields.hp && (m = /^(\d+)\s*(?:\(([^)]+)\))?/.exec(fields.hp))) { sb.hp = Number(m[1]); if (m[2]) sb.hit_dice = m[2].replace(/\s*([+-])\s*/g, ' $1 ').replace(/\s+/g, ' ').trim(); found.push('HP'); }
+  if (fields.cr && (m = /^(\d+\s*\/\s*\d+|\d+|[½¼⅛])/.exec(fields.cr))) { sb.cr = m[1].replace(/\s/g, '').replace('½', '1/2').replace('¼', '1/4').replace('⅛', '1/8'); found.push('CR'); }
+  if (fields.speed) { sb.speed = fields.speed; found.push('speed'); }
+  if (fields.skills) { sb.skills = fields.skills; found.push('skills'); }
+  for (const k of ['vulnerabilities', 'resistances', 'gear', 'languages']) if (fields[k]) { sb[k] = fields[k]; found.push(k); }
+  const imm = [fields.immunities, fields.cond_immunities].filter(Boolean);
+  if (imm.length) { sb.immunities = imm.join('; '); found.push('immunities'); }
+  if (fields.senses) { sb.senses = fields.senses.replace(/^passive perception/i, 'Passive Perception').replace(/[,;]*\s+passive Perception/i, '; Passive Perception'); found.push('senses'); }
 
-  // abilities
-  const ab = {}; const saveVals = {};
-  // 2024: "STR 15 +2 +4" (score, mod, save) — possibly several per line
-  const re24 = /\b(STR|DEX|CON|INT|WIS|CHA)\s*:?\s*(\d{1,2})\s*([+-]\s?\d+)\s*([+-]\s?\d+)/gi;
-  while ((m = re24.exec(flat))) { const a = m[1].toLowerCase(); ab[a] = Number(m[2]); saveVals[a] = Number(m[4].replace(/\s/g, '')); }
+  // ---- ability scores
+  const ab = {}, saveVals = {};
+  const num = s => Number(String(s).replace(/\s/g, '').replace(/^[^\d+-]/, ''));
+  // 2024: "STR 15 +2 +4" (score, mod, save); OCR may drop or misread signs
+  const re24 = /\b(STR|DEX|CON|INT|WIS|CHA)\b\s*:?\s*(\d{1,2})\s+([+\-]?\s?\d{1,2})\s+([+\-]?\s?\d{1,2})/gi;
+  while ((m = re24.exec(flat))) {
+    const a = m[1].toLowerCase(), sc = Number(m[2]); if (sc < 1 || sc > 30) continue;
+    ab[a] = sc; const md = mod(sc);
+    let sv = m[4].replace(/\s/g, '');
+    if (!/^[+-]/.test(sv)) sv = /^4\d$/.test(sv) && Number(sv.slice(1)) >= md ? sv.slice(1) : sv; // "+" read as "4"
+    const v = Number(sv); saveVals[a] = Math.abs(v - md) <= 10 ? (/^-/.test(m[4].replace(/\s/g, '')) ? -Math.abs(v) : v) : md;
+  }
   if (Object.keys(ab).length < 6) {
     // 2014: header row then "15 (+2) 14 (+2) …"
     const hdr = /\bSTR\s+DEX\s+CON\s+INT\s+WIS\s+CHA\b/i.exec(flat);
     if (hdr) {
-      const nums = [...flat.slice(hdr.index + hdr[0].length).matchAll(/(\d{1,2})\s*\(([+-]?\d+)\)/g)].slice(0, 6);
+      const nums = [...flat.slice(hdr.index + hdr[0].length).matchAll(/(\d{1,2})\s*\(\s*([+\-]?\s?\d+)\s*\)/g)].slice(0, 6);
       if (nums.length === 6) ABILS.forEach((a, k) => { ab[a] = Number(nums[k][1]); });
     }
   }
@@ -306,63 +391,98 @@ function parseStatblockText(raw) {
   }
   ABILS.forEach(a => { if (ab[a] != null) sb[a] = ab[a]; });
   if (Object.keys(ab).length) found.push(Object.keys(ab).length + '/6 ability scores');
-
-  // labelled lines (with wrapped continuations)
-  const fields = {};
-  let cur = null;
-  for (const l of lines.slice(i, headerEnd)) {
-    const hit = SB_LABELS.find(([, re]) => re.test(l));
-    if (hit) { cur = hit[0]; fields[cur] = l.replace(hit[1], '').trim(); continue; }
-    if (/^(AC|Armou?r Class|HP|Hit Points|Initiative|STR|DEX|CON|INT|WIS|CHA|MOD|SAVE|CR|Challenge|Proficiency)\b/i.test(l) || /^\d{1,2}\s*[-+(]/.test(l)) { cur = null; continue; }
-    if (cur && cur !== 'speed') fields[cur] += ' ' + l;
-  }
-  const clip = v => v.replace(/\s+/g, ' ').replace(/\s*\b(?:CR|Challenge)\b.*$/i, '').trim();
-  if (fields.speed) { sb.speed = clip(fields.speed.replace(/\b(?:STR|DEX)\b.*$/i, '')); found.push('speed'); }
-  if (fields.skills) { sb.skills = clip(fields.skills); found.push('skills'); }
-  for (const k of ['vulnerabilities', 'resistances', 'gear', 'languages']) if (fields[k]) { sb[k] = clip(fields[k]); found.push(k); }
-  const imm = [fields.immunities, fields.cond_immunities].filter(Boolean).map(clip);
-  if (imm.length) { sb.immunities = imm.join('; '); found.push('immunities'); }
-  if (fields.senses) { sb.senses = clip(fields.senses).replace(/^passive perception/i, 'Passive Perception').replace(/[,;]*\s+passive Perception/i, '; Passive Perception'); found.push('senses'); }
-  // saves: 2024 from the table (save ≠ mod), 2014 from "Saving Throws Dex +5"
   ABILS.forEach(a => { if (ab[a] != null && saveVals[a] != null && saveVals[a] !== mod(ab[a])) sb.saves.push(a); });
-  if (fields.saves) for (const mm of fields.saves.matchAll(/\b(Str|Dex|Con|Int|Wis|Cha)\w*\s*[+-]?\d+/gi)) { const a = mm[1].toLowerCase(); if (!sb.saves.includes(a)) sb.saves.push(a); }
+  if (fields.saves) for (const x of fields.saves.matchAll(/\b(Str|Dex|Con|Int|Wis|Cha)\w*\s*[+-]?\d+/gi)) { const a = x[1].toLowerCase(); if (!sb.saves.includes(a)) sb.saves.push(a); }
   if (sb.saves.length) found.push('saving throws');
 
-  // body: sections and "Name. Description" entries
-  let section = 'traits', entry = null, sawActions = false; const intro = [];
-  const push = (name, desc) => { entry = { name: name.trim(), desc: desc.trim() }; (sb[section] = sb[section] || []).push(entry); };
-  for (const l of lines.slice(headerEnd)) {
-    const h = l.toLowerCase().replace(/[:.]$/, '');
-    if (SB_SECTIONS[h] != null) { section = SB_SECTIONS[h]; if (section === 'actions') sawActions = true; entry = null; continue; }
+  // ---- body: sections and "Name. Description" entries
+  let section = 'traits', entry = null; const seen = new Set(); const intro = { legendary_actions: [], lair_actions: [] };
+  const push = (name, desc) => { entry = { name: name.trim(), desc: desc.trim(), section }; (sb[section] = sb[section] || []).push(entry); };
+  const bodyLines = lines.slice(bodyStart);
+  for (let k = 0; k < bodyLines.length; k++) {
+    let l = bodyLines[k];
+    const h = sectionHeading(l);
+    if (h) { section = h.key === 'regional' ? 'lair_actions' : h.key; seen.add(section); entry = null; if (!h.rest) continue; l = h.rest; }
     if (/^(proficiency bonus|pb)\b/i.test(l)) continue;
-    const em = /^([A-Z][A-Za-z'’\- ]{0,40}?(?:\s*\([^)]{1,40}\))?)\.\s+(.+)$/.exec(l);
-    const looksLikeName = em && em[1].split(/\s+/).length <= 7 && !ENTRY_STOP.test(em[1]) && !/:/.test(em[1]);
-    const prevOpen = entry && entry.desc && !/[.!?:)"]$/.test(entry.desc);
-    if (looksLikeName && !prevOpen) { push(em[1], em[2]); continue; }
-    if (entry) entry.desc += (entry.desc ? ' ' : '') + l;
-    else if (section === 'legendary_actions') intro.push(l);
-    else if (section !== 'traits') push('', l);
-    else if (sb.traits.length === 0 && !/[a-z]/.test(l)) continue;
-    else push('', l);
+    // legendary / lair intros, even without a heading
+    if (/^legendary action uses\b|\bcan take \d+ legendary actions?\b|^\w[\w\s']* can take (?:three|two|one|\d) legendary/i.test(l) && section !== 'lair_actions') {
+      if (section !== 'legendary_actions') { section = 'legendary_actions'; seen.add(section); }
+      entry = null; intro.legendary_actions.push(l); continue;
+    }
+    if (/^(?:on initiative count 20|when fighting inside its lair)/i.test(l)) { section = 'lair_actions'; seen.add(section); entry = null; intro.lair_actions.push(l); continue; }
+    const e = entryStart(l);
+    const open = entry && entry.desc && !/[.!?)"]$/.test(entry.desc);
+    if (e && !open) { push(e.name, e.desc); continue; }
+    if (entry) { entry.desc += (entry.desc ? ' ' : '') + l; continue; }
+    if (section === 'legendary_actions' || section === 'lair_actions') { intro[section].push(l); continue; }
+    // stray line before the first entry of a section (e.g. a heading OCR could not read) — keep it as a nameless entry
+    push('', l);
   }
-  if (!sawActions) {   // no "Actions" heading found (common with OCR): move attack-like traits to Actions
-    const isAction = e => /^multiattack/i.test(e.name) || /(Attack Roll|Weapon Attack|Spell Attack|Saving Throw):|\bHit:/i.test(e.desc);
-    sb.actions = sb.traits.filter(isAction).concat(sb.actions); sb.traits = sb.traits.filter(e => !isAction(e));
+  if (intro.legendary_actions.length) sb.legendary_intro = intro.legendary_actions.join(' ');
+
+  // ---- fix sections the OCR could not tell apart
+  const all = ['traits', 'actions', 'bonus_actions', 'reactions', 'legendary_actions'];
+  const move = (from, to, pred) => { const keep = [], go = []; (sb[from] || []).forEach(e => (pred(e) ? go : keep).push(e)); sb[from] = keep; sb[to] = (sb[to] || []).concat(go); return go.length; };
+  // "(Costs 2 Actions)" is always legendary
+  all.filter(k => k !== 'legendary_actions').forEach(k => move(k, 'legendary_actions', e => /\(costs?\s+\d+\s+actions?\)/i.test(e.name)));
+  // reactions: "Trigger:" (2024), or reaction wording in the description
+  if (!seen.has('reactions')) ['traits', 'actions', 'bonus_actions'].forEach(k => move(k, 'reactions', e => /^\*?Trigger:/i.test(e.desc) || /^(Parry|Uncanny Dodge|Shield|Counterspell)\b/i.test(e.name) && /\breaction\b|adds? \d+ to (?:its|their) AC/i.test(e.desc)));
+  // traits come first; once something reads like an action, the rest of that run are actions
+  if (!seen.has('actions')) {
+    let inActions = false; const keep = [], go = [];
+    for (const e of sb.traits) { if (!inActions && (/^multiattack/i.test(e.name) || ACTION_HINT.test(e.desc))) inActions = true; (inActions ? go : keep).push(e); }
+    if (go.length) { sb.traits = keep; sb.actions = go.concat(sb.actions); notes.push('No “Actions” heading was found — actions were picked out from their wording.'); }
+  } else {
+    // a trait that is clearly an attack (heading misread above it)
+    move('traits', 'actions', e => /(Attack Roll|Weapon Attack|Spell Attack):|\bHit:/.test(e.desc));
   }
-  if (intro.length) sb.legendary_intro = intro.join(' ');
-  for (const k of ['traits', 'actions', 'bonus_actions', 'reactions', 'legendary_actions', 'lair_actions']) {
+  // nameless fragments: attach to the previous entry in the same section
+  for (const k of all) {
+    const out = [];
+    for (const e of sb[k] || []) { if (!e.name && out.length) out[out.length - 1].desc += ' ' + e.desc; else out.push(e); }
+    sb[k] = out;
+  }
+  for (const k of all.concat('lair_actions')) {
     if (!sb[k]) continue;
-    sb[k] = sb[k].filter(e => e.name || e.desc).map(e => ({ name: e.name, desc: italicizeLabels(e.desc.replace(/\s+/g, ' ')) }));
+    sb[k] = sb[k].filter(e => e.name || e.desc).map(e => ({ name: e.name, desc: italicizeLabels(e.desc.replace(/\s+/g, ' ').trim()) }));
     if (sb[k].length) found.push(sb[k].length + ' ' + k.replace('_', ' '));
   }
-  if (sb.lair_actions) { if (sb.lair_actions.length) sb.traits.push({ name: 'Lair Actions', desc: sb.lair_actions.map(e => (e.name ? '**' + e.name + '.** ' : '') + e.desc).join(' ') }); delete sb.lair_actions; }
-  const warnings = [];
-  if (Object.keys(ab).length && Object.keys(ab).length < 6) warnings.push('Only ' + Object.keys(ab).length + ' of 6 ability scores were found — check them.');
-  if (!Object.keys(ab).length) warnings.push('No ability scores found — fill them in.');
+  if (sb.lair_actions) {
+    const la = sb.lair_actions; delete sb.lair_actions;
+    if (la.length || intro.lair_actions.length) sb.traits.push({ name: 'Lair Actions', desc: [intro.lair_actions.join(' ')].concat(la.map(e => (e.name ? '**' + e.name + '.** ' : '') + e.desc)).filter(Boolean).join(' ') });
+  }
+  const warnings = notes.slice();
+  const nAb = Object.keys(ab).length;
+  if (nAb && nAb < 6) warnings.push('Only ' + nAb + ' of 6 ability scores were found — check them.');
+  if (!nAb) warnings.push('No ability scores found — fill them in.');
   if (sb.ac == null) warnings.push('No Armor Class found.');
   if (sb.hp == null) warnings.push('No Hit Points found.');
   if (sb.cr == null) warnings.push('No CR found — use the CR check to pick one.');
+  if (sb.traits.some(e => !e.name) || sb.actions.some(e => !e.name)) warnings.push('Some text could not be matched to a named trait or action — check the lists.');
   return { sb, found, warnings };
+}
+
+/** Upscale, grey and stretch contrast — Tesseract reads small, coloured statblock text much better this way. */
+async function prepareForOcr(blob) {
+  try {
+    const url = URL.createObjectURL(blob);
+    const img = await new Promise((res, rej) => { const im = new Image(); im.onload = () => res(im); im.onerror = rej; im.src = url; });
+    const w0 = img.naturalWidth || img.width, h0 = img.naturalHeight || img.height;
+    const scale = Math.max(1, Math.min(3, 2200 / Math.max(w0, 1)));
+    const c = document.createElement('canvas'); c.width = Math.round(w0 * scale); c.height = Math.round(h0 * scale);
+    const g = c.getContext('2d'); g.imageSmoothingQuality = 'high'; g.drawImage(img, 0, 0, c.width, c.height);
+    const d = g.getImageData(0, 0, c.width, c.height), p = d.data;
+    let lo = 255, hi = 0; const lum = new Uint8ClampedArray(p.length / 4);
+    for (let j = 0, q = 0; j < p.length; j += 4, q++) { const v = 0.299 * p[j] + 0.587 * p[j + 1] + 0.114 * p[j + 2]; lum[q] = v; }
+    const hist = new Array(256).fill(0); lum.forEach(v => hist[v]++);
+    let acc = 0; const n = lum.length; for (let v = 0; v < 256; v++) { acc += hist[v]; if (acc > n * 0.01) { lo = v; break; } }
+    acc = 0; for (let v = 255; v >= 0; v--) { acc += hist[v]; if (acc > n * 0.01) { hi = v; break; } }
+    const span = Math.max(1, hi - lo);
+    const dark = lum.reduce((a, v) => a + v, 0) / n < 110; // dark-mode screenshots: invert to dark-on-light
+    for (let j = 0, q = 0; j < p.length; j += 4, q++) { let v = (lum[q] - lo) * 255 / span; v = Math.max(0, Math.min(255, v)); if (dark) v = 255 - v; p[j] = p[j + 1] = p[j + 2] = v; }
+    g.putImageData(d, 0, 0); URL.revokeObjectURL(url);
+    return await new Promise(res => c.toBlob(b => res(b || blob), 'image/png'));
+  } catch (e) { return blob; }
 }
 
 /* ---- OCR: Tesseract.js, downloaded on first use (needs internet once; cached by the app afterwards) ---- */
@@ -384,8 +504,8 @@ async function ocrImage(blob, onProgress) {
   const T = await loadOcrEngine();
   const worker = await T.createWorker('eng', 1, { logger: m => { if (onProgress && m && typeof m.progress === 'number') onProgress(m.progress, m.status || ''); } });
   try {
-    try { await worker.setParameters({ preserve_interword_spaces: '1' }); } catch (e) {}
-    const r = await worker.recognize(blob);
+    try { await worker.setParameters({ preserve_interword_spaces: '1', tessedit_pageseg_mode: '3' }); } catch (e) {}
+    const r = await worker.recognize(await prepareForOcr(blob));
     return (r && r.data && r.data.text) || '';
   } finally { try { await worker.terminate(); } catch (e) {} }
 }
@@ -1283,6 +1403,9 @@ class MonsterBuilderModal extends Modal {
           const n = r.createEl('input', { type: 'text', value: it.name, attr: { placeholder: 'Name' } });
           const d = r.createEl('textarea', { cls: 'dms-ta', attr: { rows: 2, placeholder: 'Description (Markdown, [[links]] work)' } }); d.value = it.desc;
           n.addEventListener('input', () => { it.name = n.value; upd(); }); d.addEventListener('input', () => { it.desc = d.value; upd(); });
+          const mv = r.createEl('select', { cls: 'dms-move', attr: { title: 'Move to another section', 'aria-label': 'Move to another section' } });
+          lists.forEach(([k2, l2]) => { const o = mv.createEl('option', { text: k2 === key ? l2 : '→ ' + l2, value: k2 }); if (k2 === key) o.selected = true; });
+          mv.addEventListener('change', () => { if (mv.value === key) return; const [it2] = sb[key].splice(idx, 1); (sb[mv.value] = sb[mv.value] || []).push(it2); const top = form.scrollTop; this.contentEl.empty(); this.onOpen(); const f2 = this.contentEl.querySelector('.dms-builder-form'); if (f2) f2.scrollTop = top; new Notice('Moved “' + (it2.name || 'entry') + '” to ' + lists.find(x => x[0] === mv.value)[1]); });
           btn(r, '', 'trash-2', () => { sb[key].splice(idx, 1); draw(); upd(); }).setAttr('aria-label', 'Remove');
         });
         const add = box.createDiv({ cls: 'dms-row dms-wrap' });
@@ -1375,7 +1498,7 @@ class MonsterBuilderModal extends Modal {
     const d = form.createEl('details', { cls: 'dms-import' }); d.open = st.open;
     d.addEventListener('toggle', () => { st.open = d.open; });
     const sum = d.createEl('summary'); setIcon(sum.createSpan({ cls: 'dms-ic' }), 'scan-text'); sum.appendText(' Import from an image or text');
-    d.createDiv({ cls: 'dms-muted', text: 'Use a picture of a statblock (screenshot, photo of a book page) or paste its text. Check the result — OCR is good but not perfect.' });
+    d.createDiv({ cls: 'dms-muted', text: 'Use a picture of a statblock (screenshot, photo of a book page) or paste its text. Check the result — OCR is good but not perfect. Tip: before filling, you can tidy the text so each heading (Traits, Actions, Bonus Actions, Reactions, Legendary Actions) sits on its own line; afterwards, use the section menu on any trait or action to move it.' });
     const drop = d.createDiv({ cls: 'dms-drop' });
     const status = d.createDiv({ cls: 'dms-import-status' });
     const ta = d.createEl('textarea', { cls: 'dms-ta dms-import-text', attr: { rows: 7, placeholder: 'Paste statblock text here (from a PDF, website or book), or read it from the image above.' } });
