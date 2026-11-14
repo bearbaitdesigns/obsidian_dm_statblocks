@@ -9,7 +9,7 @@ const obsidian = require('obsidian');
 const { Plugin, ItemView, Modal, FuzzySuggestModal, Notice, PluginSettingTab, Setting, TFile, MarkdownRenderer, parseYaml, Keymap } = obsidian;
 
 /* Icon helper with fallbacks for older Obsidian versions whose bundled Lucide lacks newer names. */
-const ICON_FALLBACKS = { 'user-round': ['user-2', 'user'], 'wand-sparkles': ['wand-2', 'wand', 'sparkles'], 'arrow-down-wide-narrow': ['sort-desc', 'arrow-down'], 'scroll-text': ['scroll', 'file-text'], 'flask-conical': ['flask-round', 'beaker'], 'dices': ['dice-5', 'dice'], 'dice-5': ['dices', 'dice'], 'backpack': ['briefcase', 'package'], 'list-ordered': ['list'], 'eye-off': ['eye'], 'swords': ['sword', 'crosshair'], 'sword': ['swords', 'crosshair'], 'store': ['shopping-bag', 'home'], 'table': ['table-2', 'grid'], 'crown': ['award', 'star'], 'castle': ['home'], 'hand': ['gift'], 'layers': ['copy'], 'wand': ['wand-2', 'sparkles'], 'skull': ['ghost', 'alert-triangle'], 'beer': ['coffee', 'cup-soda'], 'hammer': ['wrench'], 'text-cursor-input': ['type', 'edit'], 'file-plus': ['file', 'plus'], 'user-plus': ['user', 'plus'] };
+const ICON_FALLBACKS = { 'user-round': ['user-2', 'user'], 'wand-sparkles': ['wand-2', 'wand', 'sparkles'], 'arrow-down-wide-narrow': ['sort-desc', 'arrow-down'], 'scroll-text': ['scroll', 'file-text'], 'flask-conical': ['flask-round', 'beaker'], 'dices': ['dice-5', 'dice'], 'dice-5': ['dices', 'dice'], 'backpack': ['briefcase', 'package'], 'list-ordered': ['list'], 'eye-off': ['eye'], 'swords': ['sword', 'crosshair'], 'sword': ['swords', 'crosshair'], 'store': ['shopping-bag', 'home'], 'table': ['table-2', 'grid'], 'crown': ['award', 'star'], 'castle': ['home'], 'hand': ['gift'], 'layers': ['copy'], 'wand': ['wand-2', 'sparkles'], 'skull': ['ghost', 'alert-triangle'], 'beer': ['coffee', 'cup-soda'], 'hammer': ['wrench'], 'text-cursor-input': ['type', 'edit'], 'file-plus': ['file', 'plus'], 'user-plus': ['user', 'plus'], 'scan-text': ['scan', 'file-text', 'text'], 'image-plus': ['image', 'plus'], 'upload': ['arrow-up', 'file-plus'], 'eraser': ['x'], 'image': ['file'] };
 function setIcon(el, name) {
   const tryOne = n => { try { if (el.empty) el.empty(); obsidian.setIcon(el, n); } catch (e) { return false; } return !!(el.querySelector && el.querySelector('svg')); };
   if (tryOne(name)) return;
@@ -25,7 +25,7 @@ const XP_BUDGET = { 1: [50, 75, 100], 2: [100, 150, 200], 3: [150, 225, 400], 4:
 const CONDITIONS = ['Blinded', 'Charmed', 'Concentrating', 'Deafened', 'Exhaustion 1', 'Exhaustion 2', 'Exhaustion 3', 'Exhaustion 4', 'Exhaustion 5', 'Frightened', 'Grappled', 'Incapacitated', 'Invisible', 'Paralyzed', 'Petrified', 'Poisoned', 'Prone', 'Restrained', 'Stunned', 'Unconscious', 'Bloodied', 'Hidden', 'Dodging', 'Raging'];
 const ABILS = ['str', 'dex', 'con', 'int', 'wis', 'cha'];
 
-const DEFAULTS = { rollMonsterHp: false, groupSameMonsters: false, rulesFolder: 'Rules 2024', templatesFolder: 'Templates', bestiaryFolder: 'Bestiary', state: { combatants: [], round: 1, turn: 0, started: false } };
+const DEFAULTS = { rollMonsterHp: false, groupSameMonsters: false, rulesFolder: 'Rules 2024', templatesFolder: 'Templates', bestiaryFolder: 'Bestiary', ocrAllowed: null, state: { combatants: [], round: 1, turn: 0, started: false } };
 
 /* ---------------- dice ---------------- */
 function rnd(n) { return Math.floor(Math.random() * n) + 1; }
@@ -114,6 +114,282 @@ function linkifyRolls(root, label) {
 }
 
 /* ---------------- modals ---------------- */
+/* ================================================================== */
+/* Images: art, portraits, galleries (shared by DM Codex & DM Statblocks) */
+/* ================================================================== */
+const IMG_EXT = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'svg', 'avif'];
+const IMG_MIME_EXT = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/gif': 'gif', 'image/webp': 'webp', 'image/bmp': 'bmp', 'image/svg+xml': 'svg', 'image/avif': 'avif' };
+function isImageFile(f) { return !!(f && f.extension && IMG_EXT.includes(String(f.extension).toLowerCase())); }
+function imageFilesIn(app) { return app.vault.getFiles().filter(isImageFile).sort((a, b) => ((b.stat && b.stat.mtime) || 0) - ((a.stat && a.stat.mtime) || 0)); }
+/** "[[art.png|caption]]", "art.png", "![[art.png]]" or a URL → { file?, url, name, caption } */
+function resolveImage(app, v, sourcePath) {
+  const s = String(v == null ? '' : v).trim(); if (!s) return null;
+  if (/^(https?:|data:image|app:|blob:)/i.test(s)) return { url: s, name: s.split('/').pop(), caption: '' };
+  let m = /^!?\[\[([^\]|#]+)(?:\|([^\]]*))?\]\]$/.exec(s);
+  if (!m) { const md = /^!?\[([^\]]*)\]\(([^)]+)\)$/.exec(s); if (md) { if (/^https?:/i.test(md[2])) return { url: md[2], name: md[2].split('/').pop(), caption: md[1] }; m = [null, decodeURI(md[2]), md[1]]; } }
+  const link = m ? m[1] : s.replace(/^!/, '');
+  const f = app.metadataCache.getFirstLinkpathDest(link.trim(), sourcePath || '');
+  return f && isImageFile(f) ? { file: f, url: app.vault.getResourcePath(f), name: f.basename, caption: (m && m[2]) || '' } : null;
+}
+function imageLinkFor(app, f, sourcePath, caption) {
+  const t = app.metadataCache.fileToLinktext ? app.metadataCache.fileToLinktext(f, sourcePath || '', false) : f.name;
+  return '[[' + t + (caption ? '|' + String(caption).replace(/[\[\]|]/g, '') : '') + ']]';
+}
+/** Copy an image (File/Blob) into the vault, following the user's attachment settings. */
+async function saveImageToVault(app, blob, name, sourcePath) {
+  let ext = (String(name || '').match(/\.([a-z0-9]+)$/i) || [])[1] || IMG_MIME_EXT[blob.type] || 'png';
+  let base = String(name || 'image').replace(/\.[^.]+$/, '').replace(/[\\/:*?"<>|#^\[\]]/g, '').trim() || 'image';
+  if (/^image$|^Pasted image$/i.test(base)) base = 'Pasted image ' + new Date().toISOString().replace(/[-:T]/g, '').slice(0, 14);
+  const fname = base + '.' + ext.toLowerCase();
+  let path;
+  if (app.fileManager.getAvailablePathForAttachment) path = await app.fileManager.getAvailablePathForAttachment(fname, sourcePath || '');
+  else { path = 'Assets/' + fname; let i = 1; while (app.vault.getAbstractFileByPath(path)) path = 'Assets/' + base + ' ' + (i++) + '.' + ext; }
+  const dir = path.split('/').slice(0, -1).join('/');
+  if (dir && !app.vault.getAbstractFileByPath(dir)) { try { await app.vault.createFolder(dir); } catch (e) {} }
+  return app.vault.createBinary(path, await blob.arrayBuffer());
+}
+/** Open the system file picker for images. */
+function chooseImageFiles(multiple) {
+  return new Promise(resolve => {
+    const i = document.createElement('input'); i.type = 'file'; i.accept = 'image/*'; i.multiple = !!multiple; i.style.display = 'none';
+    i.addEventListener('change', () => { resolve(Array.from(i.files || [])); i.remove(); });
+    document.body.appendChild(i); i.click();
+  });
+}
+function imagesFromDataTransfer(dt) {
+  const out = [];
+  if (!dt) return out;
+  for (const f of Array.from(dt.files || [])) if (/^image\//.test(f.type)) out.push(f);
+  if (!out.length) for (const it of Array.from(dt.items || [])) if (it.kind === 'file' && /^image\//.test(it.type)) { const f = it.getAsFile(); if (f) out.push(f); }
+  return out;
+}
+/** Make an element accept dropped / pasted images. */
+function makeImageDropTarget(el, onFiles, hoverCls) {
+  el.setAttr ? el.setAttr('tabindex', '0') : el.setAttribute('tabindex', '0');
+  const cls = hoverCls || 'is-dragover';
+  el.addEventListener('dragover', e => { if (e.dataTransfer && Array.from(e.dataTransfer.types || []).includes('Files')) { e.preventDefault(); el.classList.add(cls); } });
+  el.addEventListener('dragleave', () => el.classList.remove(cls));
+  el.addEventListener('drop', e => { const fs = imagesFromDataTransfer(e.dataTransfer); el.classList.remove(cls); if (fs.length) { e.preventDefault(); e.stopPropagation(); onFiles(fs); } });
+  el.addEventListener('paste', e => { const fs = imagesFromDataTransfer(e.clipboardData); if (fs.length) { e.preventDefault(); e.stopPropagation(); onFiles(fs); } });
+  return el;
+}
+class ImageSuggestModal extends FuzzySuggestModal {
+  constructor(app, onChoose, placeholder) { super(app); this.onChoose = onChoose; this.setPlaceholder(placeholder || 'Choose an image from the vault…'); }
+  getItems() { return imageFilesIn(this.app); }
+  getItemText(f) { return f.path; }
+  renderSuggestion(m, el) {
+    const f = m.item || m; el.addClass('img-suggest');
+    const img = el.createEl('img', { cls: 'img-suggest-thumb' }); img.src = this.app.vault.getResourcePath(f);
+    const t = el.createDiv(); t.createDiv({ text: f.name }); t.createDiv({ cls: 'img-suggest-path', text: f.parent && f.parent.path && f.parent.path !== '/' ? f.parent.path : '' });
+  }
+  onChooseItem(f) { this.onChoose(f); }
+}
+/** Full-size viewer with previous / next. items: [{ url, caption, file }] */
+class ImageLightbox extends Modal {
+  constructor(app, items, index, opts) { super(app); this.items = items; this.i = index || 0; this.opts = opts || {}; }
+  onOpen() {
+    this.modalEl.addClass('img-lightbox-modal');
+    const c = this.contentEl; c.addClass('img-lightbox');
+    const stage = c.createDiv({ cls: 'img-lightbox-stage' });
+    const img = stage.createEl('img');
+    const cap = c.createDiv({ cls: 'img-lightbox-cap' });
+    const nav = (d) => { this.i = (this.i + d + this.items.length) % this.items.length; draw(); };
+    let prev, next;
+    if (this.items.length > 1) {
+      prev = stage.createEl('button', { cls: 'img-lightbox-nav is-prev', text: '‹', attr: { 'aria-label': 'Previous' } }); prev.addEventListener('click', () => nav(-1));
+      next = stage.createEl('button', { cls: 'img-lightbox-nav is-next', text: '›', attr: { 'aria-label': 'Next' } }); next.addEventListener('click', () => nav(1));
+      this.scope && this.scope.register && (this.scope.register([], 'ArrowLeft', () => { nav(-1); return false; }), this.scope.register([], 'ArrowRight', () => { nav(1); return false; }));
+    }
+    const draw = () => {
+      const it = this.items[this.i]; img.src = it.url; img.alt = it.caption || it.name || '';
+      cap.empty();
+      cap.createSpan({ text: it.caption || it.name || '' });
+      if (this.items.length > 1) cap.createSpan({ cls: 'img-lightbox-count', text: ' · ' + (this.i + 1) + ' / ' + this.items.length });
+      if (it.file) { const a = cap.createEl('a', { cls: 'img-lightbox-open', text: 'Open file' }); a.addEventListener('click', e => { e.preventDefault(); this.close(); this.app.workspace.getLeaf('tab').openFile(it.file); }); }
+    };
+    draw();
+  }
+  onClose() { this.contentEl.empty(); }
+}
+
+/* ================================================================== */
+/* Import a statblock from text (pasted, or read from an image)        */
+/* ================================================================== */
+const SB_SECTIONS = { 'traits': 'traits', 'actions': 'actions', 'bonus actions': 'bonus_actions', 'reactions': 'reactions', 'legendary actions': 'legendary_actions', 'lair actions': 'lair_actions', 'mythic actions': 'legendary_actions' };
+const SB_LABELS = [
+  ['saves', /^(?:saving throws?|saves)\b\s*:?\s*/i],
+  ['skills', /^skills?\b\s*:?\s*/i],
+  ['vulnerabilities', /^(?:damage\s+)?vulnerabilit(?:y|ies)\b\s*:?\s*/i],
+  ['resistances', /^(?:damage\s+)?resistances?\b\s*:?\s*/i],
+  ['immunities', /^(?:damage\s+)?immunit(?:y|ies)\b\s*:?\s*/i],
+  ['cond_immunities', /^condition\s+immunit(?:y|ies)\b\s*:?\s*/i],
+  ['gear', /^gear\b\s*:?\s*/i],
+  ['senses', /^senses?\b\s*:?\s*/i],
+  ['languages', /^languages?\b\s*:?\s*/i],
+  ['speed', /^speed\b\s*:?\s*/i],
+];
+const ABIL_ALIASES = { str: 'str', strength: 'str', dex: 'dex', dexterity: 'dex', con: 'con', constitution: 'con', int: 'int', intelligence: 'int', wis: 'wis', wisdom: 'wis', cha: 'cha', charisma: 'cha' };
+const ENTRY_STOP = /^(hit|miss|failure|success|trigger|response|failure or success|first failure|second failure|melee|ranged|each|if|on|the|a|an|it|when|while|until|at|this|that|in)\b/i;
+
+function cleanOcrText(t) {
+  return String(t || '')
+    .replace(/\r/g, '')
+    .replace(/[‐‑‒–—―−]/g, m => (m === '—' || m === '―' ? '—' : '-'))
+    .replace(/[’‘`]/g, "'").replace(/[“”]/g, '"')
+    .replace(/ /g, ' ').replace(/[ \t]+/g, ' ')
+    .replace(/(\w)-\n(\w)/g, '$1$2')               // re-join hyphenated words
+    .replace(/\bl(\d)\b/g, '1$1').replace(/\b(\d)l\b/g, '$11') // l ↔ 1 slips
+    .replace(/\(\s*([+-])\s*(\d+)\s*\)/g, '($1$2)');
+}
+function titleCase(s) { return s.toLowerCase().replace(/\b([a-z])/g, c => c.toUpperCase()).replace(/\b(Of|The|And|In|On|A|An)\b/g, (w, x, i) => i ? w.toLowerCase() : w); }
+function italicizeLabels(desc) {
+  return desc
+    .replace(/(^|\s)(Melee or Ranged Attack Roll|Melee Attack Roll|Ranged Attack Roll|Melee Weapon Attack|Ranged Weapon Attack|Melee Spell Attack|Ranged Spell Attack|(?:Strength|Dexterity|Constitution|Intelligence|Wisdom|Charisma) Saving Throw|Hit|Miss|Failure or Success|First Failure|Second Failure|Failure|Success|Trigger|Response):(?!\*)/g, '$1*$2:*');
+}
+
+/** Parse a statblock written as plain text (2024 or 2014 layout, OCR noise tolerated). */
+function parseStatblockText(raw) {
+  const text = cleanOcrText(raw);
+  const lines = text.split('\n').map(l => l.trim()).filter(l => l && !/^[-—_=~.·•]+$/.test(l));
+  const sb = { saves: [], traits: [], actions: [], bonus_actions: [], reactions: [], legendary_actions: [] };
+  const found = [];
+  if (!lines.length) return { sb, found, warnings: ['No text to read.'] };
+  const sizeRe = /^(tiny|small|medium|large|huge|gargantuan)(?:\s+or\s+(?:tiny|small|medium|large|huge|gargantuan))?\s+(.+?)(?:,\s*(.+))?$/i;
+  let i = 0;
+  // name: first line that isn't the size/type line
+  const sizeIdx = lines.findIndex(l => sizeRe.test(l) && l.length < 90);
+  const nameLine = sizeIdx > 0 ? lines[sizeIdx - 1] : sizeIdx === 0 ? '' : lines[0];
+  if (nameLine) { sb.name = /[a-z]/.test(nameLine) ? nameLine : titleCase(nameLine); found.push('name'); }
+  if (sizeIdx >= 0) {
+    const m = sizeRe.exec(lines[sizeIdx]);
+    sb.size = titleCase(m[1]); sb.type = m[2].trim().replace(/\s*\(.*?\)\s*$/, s => s); if (m[3]) sb.alignment = titleCase(m[3].trim()).replace(/\bOr\b/g, 'or');
+    sb.type = sb.type.replace(/^(\w)/, c => c.toUpperCase()); found.push('size & type');
+    i = sizeIdx + 1;
+  } else i = nameLine ? 1 : 0;
+
+  // header block: everything up to the first section heading / first "Name. text" entry after CR
+  const isHeading = l => SB_SECTIONS[l.toLowerCase().replace(/[:.]$/, '')] != null;
+  let headerEnd = lines.length;
+  for (let k = i; k < lines.length; k++) { if (isHeading(lines[k])) { headerEnd = k; break; } }
+  let crLine = -1;
+  for (let k = i; k < headerEnd; k++) if (/^(?:cr|challenge)\b/i.test(lines[k])) { crLine = k; break; }
+  if (crLine >= 0 && headerEnd === lines.length) headerEnd = crLine + 1; // 2014: traits follow CR without a heading
+  else if (crLine >= 0 && crLine + 1 < headerEnd) {                      // proficiency line etc. may sit between CR and heading
+    let k = crLine + 1; while (k < headerEnd && /^(proficiency bonus|pb)\b/i.test(lines[k])) k++;
+    if (k < headerEnd) { headerEnd = k; }
+  }
+  const header = lines.slice(i, headerEnd).join('\n');
+  const flat = header.replace(/\n/g, ' ');
+
+  let m;
+  if ((m = /\b(?:AC|Armou?r Class)\s*:?\s*(\d+)(\s*\([^)]*\))?/i.exec(flat))) { sb.ac = Number(m[1]); found.push('AC'); }
+  if ((m = /\bInitiative\s*:?\s*([+-]?\d+)/i.exec(flat))) { sb.initiative = Number(m[1]); found.push('initiative'); }
+  if ((m = /\b(?:HP|Hit Points)\s*:?\s*(\d+)\s*(?:\(([^)]+)\))?/i.exec(flat))) { sb.hp = Number(m[1]); if (m[2]) sb.hit_dice = m[2].replace(/\s*([+-])\s*/g, ' $1 ').replace(/-/g, '−').replace(/\s+/g, ' ').trim(); found.push('HP'); }
+  if ((m = /\b(?:CR|Challenge(?: Rating)?)\s*:?\s*(\d+\s*\/\s*\d+|\d+|[½¼⅛])/i.exec(flat))) { sb.cr = m[1].replace(/\s/g, '').replace('½', '1/2').replace('¼', '1/4').replace('⅛', '1/8'); found.push('CR'); }
+
+  // abilities
+  const ab = {}; const saveVals = {};
+  // 2024: "STR 15 +2 +4" (score, mod, save) — possibly several per line
+  const re24 = /\b(STR|DEX|CON|INT|WIS|CHA)\s*:?\s*(\d{1,2})\s*([+-]\s?\d+)\s*([+-]\s?\d+)/gi;
+  while ((m = re24.exec(flat))) { const a = m[1].toLowerCase(); ab[a] = Number(m[2]); saveVals[a] = Number(m[4].replace(/\s/g, '')); }
+  if (Object.keys(ab).length < 6) {
+    // 2014: header row then "15 (+2) 14 (+2) …"
+    const hdr = /\bSTR\s+DEX\s+CON\s+INT\s+WIS\s+CHA\b/i.exec(flat);
+    if (hdr) {
+      const nums = [...flat.slice(hdr.index + hdr[0].length).matchAll(/(\d{1,2})\s*\(([+-]?\d+)\)/g)].slice(0, 6);
+      if (nums.length === 6) ABILS.forEach((a, k) => { ab[a] = Number(nums[k][1]); });
+    }
+  }
+  if (Object.keys(ab).length < 6) {
+    const re = /\b(STR|DEX|CON|INT|WIS|CHA|Strength|Dexterity|Constitution|Intelligence|Wisdom|Charisma)\b\s*:?\s*(\d{1,2})\b/gi;
+    while ((m = re.exec(flat))) { const a = ABIL_ALIASES[m[1].toLowerCase()]; if (a && ab[a] == null) ab[a] = Number(m[2]); }
+  }
+  ABILS.forEach(a => { if (ab[a] != null) sb[a] = ab[a]; });
+  if (Object.keys(ab).length) found.push(Object.keys(ab).length + '/6 ability scores');
+
+  // labelled lines (with wrapped continuations)
+  const fields = {};
+  let cur = null;
+  for (const l of lines.slice(i, headerEnd)) {
+    const hit = SB_LABELS.find(([, re]) => re.test(l));
+    if (hit) { cur = hit[0]; fields[cur] = l.replace(hit[1], '').trim(); continue; }
+    if (/^(AC|Armou?r Class|HP|Hit Points|Initiative|STR|DEX|CON|INT|WIS|CHA|MOD|SAVE|CR|Challenge|Proficiency)\b/i.test(l) || /^\d{1,2}\s*[-+(]/.test(l)) { cur = null; continue; }
+    if (cur && cur !== 'speed') fields[cur] += ' ' + l;
+  }
+  const clip = v => v.replace(/\s+/g, ' ').replace(/\s*\b(?:CR|Challenge)\b.*$/i, '').trim();
+  if (fields.speed) { sb.speed = clip(fields.speed.replace(/\b(?:STR|DEX)\b.*$/i, '')); found.push('speed'); }
+  if (fields.skills) { sb.skills = clip(fields.skills); found.push('skills'); }
+  for (const k of ['vulnerabilities', 'resistances', 'gear', 'languages']) if (fields[k]) { sb[k] = clip(fields[k]); found.push(k); }
+  const imm = [fields.immunities, fields.cond_immunities].filter(Boolean).map(clip);
+  if (imm.length) { sb.immunities = imm.join('; '); found.push('immunities'); }
+  if (fields.senses) { sb.senses = clip(fields.senses).replace(/^passive perception/i, 'Passive Perception').replace(/[,;]*\s+passive Perception/i, '; Passive Perception'); found.push('senses'); }
+  // saves: 2024 from the table (save ≠ mod), 2014 from "Saving Throws Dex +5"
+  ABILS.forEach(a => { if (ab[a] != null && saveVals[a] != null && saveVals[a] !== mod(ab[a])) sb.saves.push(a); });
+  if (fields.saves) for (const mm of fields.saves.matchAll(/\b(Str|Dex|Con|Int|Wis|Cha)\w*\s*[+-]?\d+/gi)) { const a = mm[1].toLowerCase(); if (!sb.saves.includes(a)) sb.saves.push(a); }
+  if (sb.saves.length) found.push('saving throws');
+
+  // body: sections and "Name. Description" entries
+  let section = 'traits', entry = null, sawActions = false; const intro = [];
+  const push = (name, desc) => { entry = { name: name.trim(), desc: desc.trim() }; (sb[section] = sb[section] || []).push(entry); };
+  for (const l of lines.slice(headerEnd)) {
+    const h = l.toLowerCase().replace(/[:.]$/, '');
+    if (SB_SECTIONS[h] != null) { section = SB_SECTIONS[h]; if (section === 'actions') sawActions = true; entry = null; continue; }
+    if (/^(proficiency bonus|pb)\b/i.test(l)) continue;
+    const em = /^([A-Z][A-Za-z'’\- ]{0,40}?(?:\s*\([^)]{1,40}\))?)\.\s+(.+)$/.exec(l);
+    const looksLikeName = em && em[1].split(/\s+/).length <= 7 && !ENTRY_STOP.test(em[1]) && !/:/.test(em[1]);
+    const prevOpen = entry && entry.desc && !/[.!?:)"]$/.test(entry.desc);
+    if (looksLikeName && !prevOpen) { push(em[1], em[2]); continue; }
+    if (entry) entry.desc += (entry.desc ? ' ' : '') + l;
+    else if (section === 'legendary_actions') intro.push(l);
+    else if (section !== 'traits') push('', l);
+    else if (sb.traits.length === 0 && !/[a-z]/.test(l)) continue;
+    else push('', l);
+  }
+  if (!sawActions) {   // no "Actions" heading found (common with OCR): move attack-like traits to Actions
+    const isAction = e => /^multiattack/i.test(e.name) || /(Attack Roll|Weapon Attack|Spell Attack|Saving Throw):|\bHit:/i.test(e.desc);
+    sb.actions = sb.traits.filter(isAction).concat(sb.actions); sb.traits = sb.traits.filter(e => !isAction(e));
+  }
+  if (intro.length) sb.legendary_intro = intro.join(' ');
+  for (const k of ['traits', 'actions', 'bonus_actions', 'reactions', 'legendary_actions', 'lair_actions']) {
+    if (!sb[k]) continue;
+    sb[k] = sb[k].filter(e => e.name || e.desc).map(e => ({ name: e.name, desc: italicizeLabels(e.desc.replace(/\s+/g, ' ')) }));
+    if (sb[k].length) found.push(sb[k].length + ' ' + k.replace('_', ' '));
+  }
+  if (sb.lair_actions) { if (sb.lair_actions.length) sb.traits.push({ name: 'Lair Actions', desc: sb.lair_actions.map(e => (e.name ? '**' + e.name + '.** ' : '') + e.desc).join(' ') }); delete sb.lair_actions; }
+  const warnings = [];
+  if (Object.keys(ab).length && Object.keys(ab).length < 6) warnings.push('Only ' + Object.keys(ab).length + ' of 6 ability scores were found — check them.');
+  if (!Object.keys(ab).length) warnings.push('No ability scores found — fill them in.');
+  if (sb.ac == null) warnings.push('No Armor Class found.');
+  if (sb.hp == null) warnings.push('No Hit Points found.');
+  if (sb.cr == null) warnings.push('No CR found — use the CR check to pick one.');
+  return { sb, found, warnings };
+}
+
+/* ---- OCR: Tesseract.js, downloaded on first use (needs internet once; cached by the app afterwards) ---- */
+const OCR_SRC = 'https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js';
+let ocrLoading = null;
+function loadOcrEngine() {
+  if (window.Tesseract) return Promise.resolve(window.Tesseract);
+  if (ocrLoading) return ocrLoading;
+  ocrLoading = new Promise((resolve, reject) => {
+    const s = document.createElement('script'); s.src = OCR_SRC; s.async = true;
+    s.onload = () => window.Tesseract ? resolve(window.Tesseract) : reject(new Error('OCR engine did not load'));
+    s.onerror = () => { ocrLoading = null; reject(new Error('Could not download the OCR engine (are you offline?)')); };
+    document.head.appendChild(s);
+  });
+  return ocrLoading;
+}
+/** Read text from an image Blob/File. onProgress(0..1, status) */
+async function ocrImage(blob, onProgress) {
+  const T = await loadOcrEngine();
+  const worker = await T.createWorker('eng', 1, { logger: m => { if (onProgress && m && typeof m.progress === 'number') onProgress(m.progress, m.status || ''); } });
+  try {
+    try { await worker.setParameters({ preserve_interword_spaces: '1' }); } catch (e) {}
+    const r = await worker.recognize(blob);
+    return (r && r.data && r.data.text) || '';
+  } finally { try { await worker.terminate(); } catch (e) {} }
+}
+
 class FileSuggest extends FuzzySuggestModal {
   constructor(app, items, onChoose, ph) { super(app); this.items = items; this.onChoose = onChoose; this.setPlaceholder(ph || 'Choose…'); }
   getItems() { return this.items; }
@@ -256,6 +532,8 @@ class StatSettings extends PluginSettingTab {
     const c = this.containerEl; c.empty(); const s = this.plugin.settings;
     new Setting(c).setName('Roll monster HP').setDesc('Roll hit dice when adding monsters instead of using the average.')
       .addToggle(t => t.setValue(s.rollMonsterHp).onChange(async v => { s.rollMonsterHp = v; await this.plugin.saveSettings(); }));
+    new Setting(c).setName('Read text from images (OCR)').setDesc('Import a statblock from a picture. The first time, this downloads the free Tesseract OCR engine and English language data (about 15 MB) from cdn.jsdelivr.net; the image itself never leaves your device. Off = you can still paste statblock text.')
+      .addToggle(t => t.setValue(s.ocrAllowed === true).onChange(async v => { s.ocrAllowed = v; await this.plugin.saveSettings(); }));
   }
 }
 
@@ -359,6 +637,14 @@ class DMStatblocksPlugin extends Plugin {
     const name = sb.name || 'Unnamed';
     const pb = Number(sb.pb) || pbForCr(sb.cr);
     const head = box.createDiv({ cls: 'dms-head' });
+    let art = sb._artUrl ? { url: sb._artUrl, name: name } : resolveImage(this.app, sb.image, sourcePath);
+    if (!art && !sb.image && sourcePath && !sb._preview) { const host = this.app.vault.getAbstractFileByPath(sourcePath); if (host instanceof TFile && ['monster', 'npc'].includes(this.fm(host).type)) art = resolveImage(this.app, this.fm(host).image, sourcePath); }
+    if (art) {
+      box.addClass('has-art');
+      const fig = head.createDiv({ cls: 'dms-art' }); lpSafe(fig);
+      const im = fig.createEl('img', { attr: { alt: name, loading: 'lazy' } }); im.src = art.url;
+      fig.addEventListener('click', e => { e.stopPropagation(); new ImageLightbox(this.app, [{ url: art.url, caption: name, file: art.file }], 0).open(); });
+    }
     const titleRow = head.createDiv({ cls: 'dms-title-row' });
     titleRow.createDiv({ cls: 'dms-title', text: name });
     const actions = titleRow.createDiv({ cls: 'dms-head-actions' });
@@ -695,7 +981,7 @@ function generateMonster(opts) {
 }
 
 /* ---------- YAML writer for statblocks ---------- */
-const SB_KEYS = ['name', 'size', 'type', 'alignment', 'ac', 'initiative', 'hp', 'hit_dice', 'speed', 'str', 'dex', 'con', 'int', 'wis', 'cha', 'saves', 'skills', 'vulnerabilities', 'resistances', 'immunities', 'gear', 'senses', 'languages', 'cr', 'xp', 'pb'];
+const SB_KEYS = ['name', 'image', 'size', 'type', 'alignment', 'ac', 'initiative', 'hp', 'hit_dice', 'speed', 'str', 'dex', 'con', 'int', 'wis', 'cha', 'saves', 'skills', 'vulnerabilities', 'resistances', 'immunities', 'gear', 'senses', 'languages', 'cr', 'xp', 'pb'];
 function yScalar(v) {
   if (typeof v === 'number' || typeof v === 'boolean') return String(v);
   if (Array.isArray(v)) return JSON.stringify(v);
@@ -723,9 +1009,10 @@ function monsterNote(sb, extra) {
   const env = extra.environment || meta.environment || [];
   const villain = !!extra.villain;
   let fm = '---\ntype: monster\ncr: "' + (sb.cr ?? '') + '"\ncreature_type: ' + yScalar(sb.type ? String(sb.type).split(' ')[0] : '') + '\nenvironment: ' + JSON.stringify([].concat(env)) + '\nsource: ' + (String(sb.source || '').startsWith('Generated') ? 'Generated' : 'Homebrew') + '\n';
+  if (sb.image) fm += 'image: ' + yScalar(sb.image) + '\n';
   if (villain) fm += 'villain: true\nstatus: active\n';
   fm += 'tags: [monster' + (villain ? ', villain' : '') + ']\n---\n';
-  const clean = Object.assign({}, sb); delete clean._meta; delete clean._preview; delete clean._from;
+  const clean = Object.assign({}, sb); delete clean._meta; delete clean._preview; delete clean._from; delete clean._artUrl;
   let body = fm + '# ' + sb.name + '\n\n' + statblockToYaml(clean) + '\n\n## Tactics\n' + (extra.tactics || meta.tactics || '') + '\n';
   if (villain) {
     body += '\n## Villain profile\n> [!secret] What they want\n> ' + (extra.goal || '*Goal*') + '\n\n- **Lair / base:** ' + (extra.lair || '') + '\n- **Minions:** ' + (extra.minions || '') + '\n- **Weakness:** ' + (extra.weakness || '') + '\n- **If they win:** \n\n## Scheme clock\n- [ ] \n- [ ] \n- [ ] \n- [ ] \n';
@@ -929,6 +1216,7 @@ class MonsterBuilderModal extends Modal {
     const bind = (el, key, num) => { el.addEventListener('input', () => { sb[key] = num ? (el.value === '' ? null : Number(el.value)) : el.value; upd(); }); el.addEventListener('change', () => { sb[key] = num ? (el.value === '' ? null : Number(el.value)) : el.value; upd(); }); return el; };
     const sec = t => { form.createDiv({ cls: 'dms-sec', text: t }); return form.createDiv({ cls: 'dms-form-grid' }); };
 
+    this.renderImport(form);
     let g = sec('Basics');
     const kind = field(g, 'Kind', selectEl([['monster', 'Monster'], ['villain', 'Villain']], this.villain ? 'villain' : 'monster'));
     kind.addEventListener('change', () => { this.villain = kind.value === 'villain'; villainBox.style.display = this.villain ? '' : 'none'; });
@@ -946,6 +1234,9 @@ class MonsterBuilderModal extends Modal {
     btn(suggest, 'Apply typical AC/HP for this CR', 'wand', () => { const t = crTargets(sb.cr); sb.ac = t.ac; acI.value = t.ac; const die = HIT_DIE[sb.size] || 8; const cm = mod(sb.con); const n = Math.max(1, Math.round(t.hp / ((die + 1) / 2 + cm))); hdN.value = n; calcHp(); });
     g.createDiv({ cls: 'dms-span2 dms-sec-sub', text: 'CR check — updates as you edit' });
     this.crCheckEl = g.createDiv({ cls: 'dms-span2' });
+
+    form.createDiv({ cls: 'dms-sec', text: 'Art' });
+    this.renderArt(form.createDiv({ cls: 'dms-art-edit' }));
 
     g = sec('Defenses & movement');
     const acI = bind(field(g, 'Armor Class', inputEl('number', sb.ac)), 'ac', true);
@@ -1023,7 +1314,7 @@ class MonsterBuilderModal extends Modal {
     this.refresh();
   }
   finalSb() {
-    const sb = JSON.parse(JSON.stringify(this.sb)); delete sb._meta;
+    const sb = JSON.parse(JSON.stringify(this.sb)); delete sb._meta; if (this.pendingArt) sb._artUrl = this.pendingArt.url; if (!sb.image) delete sb.image;
     sb.name = (sb.name || '').trim() || 'Unnamed Creature';
     const pb = pbForCr(sb.cr); const wis = mod(sb.wis);
     const percM = String(sb.skills || '').match(/Perception\s*([+−-]\s?\d+)/i);
@@ -1041,20 +1332,124 @@ class MonsterBuilderModal extends Modal {
     catch (e) { this.previewEl.createDiv({ cls: 'dms-error', text: e.message }); }
   }
   async save() {
-    const sb = this.finalSb();
+    if (this.pendingArt) {
+      const where = this.opts.file || ((this.plugin.settings.bestiaryFolder || 'Bestiary') + '/' + ((this.sb.name || 'creature').trim() || 'creature') + '.md');
+      try { const f = await saveImageToVault(this.app, this.pendingArt.blob, ((this.sb.name || 'creature').trim() || 'creature') + ' art.' + (IMG_MIME_EXT[this.pendingArt.blob.type] || (String(this.pendingArt.name).match(/\.([a-z0-9]+)$/i) || [, 'png'])[1]), where); this.sb.image = imageLinkFor(this.app, f, where); this.pendingArt = null; }
+      catch (e) { new Notice('Could not save the art: ' + e.message); }
+    }
+    const sb = this.finalSb(); delete sb._artUrl;
     if (this.opts.file) {
       const f = this.app.vault.getAbstractFileByPath(this.opts.file);
       if (!(f instanceof TFile)) return;
       const text = await this.app.vault.read(f);
       const out = text.match(/```statblock[^\n]*\n[\s\S]*?```/) ? text.replace(/```statblock[^\n]*\n[\s\S]*?```/, () => statblockToYaml(sb)) : text.replace(/\s*$/, '\n\n') + statblockToYaml(sb) + '\n';
       await this.app.vault.modify(f, out);
-      if (this.plugin.fm(f).type === 'monster' || this.villain) await this.app.fileManager.processFrontMatter(f, fm => { fm.cr = String(sb.cr); fm.creature_type = String(sb.type || '').split(' ')[0]; if (this.villain) { fm.villain = true; } });
+      if (this.plugin.fm(f).type === 'monster' || this.villain) await this.app.fileManager.processFrontMatter(f, fm => { if (sb.image) fm.image = sb.image; else delete fm.image; fm.cr = String(sb.cr); fm.creature_type = String(sb.type || '').split(' ')[0]; if (this.villain) { fm.villain = true; } });
       new Notice('Statblock updated: ' + sb.name); this.close(); return;
     }
     const f = await this.plugin.saveMonster(Object.assign(sb, { _meta: { tactics: this.extra.tactics, environment: this.extra.environment } }), Object.assign({ villain: this.villain }, this.extra));
     if (f) { this.close(); this.app.workspace.getLeaf(false).openFile(f); }
   }
   onClose() { this.contentEl.empty(); }
+  /* ---- art ---- */
+  renderArt(box) {
+    const draw = () => {
+      box.empty();
+      const art = this.pendingArt ? { url: this.pendingArt.url } : resolveImage(this.app, this.sb.image, this.opts.file || '');
+      const thumb = box.createDiv({ cls: 'dms-art-thumb' + (art ? '' : ' is-empty') });
+      if (art) thumb.createEl('img').src = art.url; else thumb.createDiv({ cls: 'dms-muted', text: 'Drop or paste an image' });
+      makeImageDropTarget(thumb, fs => setFile(fs[0]));
+      const col = box.createDiv({ cls: 'dms-art-btns' });
+      btn(col, 'Upload image…', 'upload', async () => { const fs = await chooseImageFiles(false); if (fs[0]) setFile(fs[0]); });
+      btn(col, 'From vault…', 'image', () => new ImageSuggestModal(this.app, f => { this.pendingArt = null; this.sb.image = imageLinkFor(this.app, f, this.opts.file || ''); draw(); this.refresh(); }).open());
+      if (art) btn(col, 'Remove', 'trash-2', () => { this.pendingArt = null; this.sb.image = ''; draw(); this.refresh(); });
+      col.createDiv({ cls: 'dms-muted dms-small-note', text: art ? (this.pendingArt ? 'Saved to your vault when you save the creature.' : String(this.sb.image)) : 'Shown on the statblock. Monster art, a villain portrait or a token.' });
+    };
+    const setFile = f => { this.pendingArt = { blob: f, name: f.name || 'art.png', url: URL.createObjectURL(f) }; this.sb.image = ''; draw(); this.refresh(); };
+    this.drawArt = draw; this.setArtFile = setFile;
+    draw();
+  }
+  /* ---- import from image / text ---- */
+  renderImport(form) {
+    const st = this.importState || (this.importState = { blob: null, url: '', name: '', file: null, text: '', useArt: false, msg: '', open: !!this.opts.importOpen });
+    const d = form.createEl('details', { cls: 'dms-import' }); d.open = st.open;
+    d.addEventListener('toggle', () => { st.open = d.open; });
+    const sum = d.createEl('summary'); setIcon(sum.createSpan({ cls: 'dms-ic' }), 'scan-text'); sum.appendText(' Import from an image or text');
+    d.createDiv({ cls: 'dms-muted', text: 'Use a picture of a statblock (screenshot, photo of a book page) or paste its text. Check the result — OCR is good but not perfect.' });
+    const drop = d.createDiv({ cls: 'dms-drop' });
+    const status = d.createDiv({ cls: 'dms-import-status' });
+    const ta = d.createEl('textarea', { cls: 'dms-ta dms-import-text', attr: { rows: 7, placeholder: 'Paste statblock text here (from a PDF, website or book), or read it from the image above.' } });
+    ta.value = st.text; ta.addEventListener('input', () => { st.text = ta.value; });
+    const artRow = d.createEl('label', { cls: 'dms-import-art' });
+    const artCb = artRow.createEl('input', { type: 'checkbox' }); artCb.checked = st.useArt; artRow.appendText(' Also use this picture as the creature\'s art');
+    artCb.addEventListener('change', () => { st.useArt = artCb.checked; });
+    const foot = d.createDiv({ cls: 'dms-row dms-wrap' });
+    const say = (msg, cls) => { st.msg = msg; status.empty(); if (msg) status.createDiv({ cls: cls || 'dms-muted', text: msg }); };
+    let readBtn;
+    const drawDrop = () => {
+      drop.empty(); drop.toggleClass('has-image', !!st.url); artRow.style.display = st.url ? '' : 'none';
+      if (st.url) {
+        drop.createEl('img', { cls: 'dms-drop-img' }).src = st.url;
+        const side = drop.createDiv({ cls: 'dms-drop-side' });
+        side.createDiv({ cls: 'dms-drop-name', text: st.name || 'image' });
+        readBtn = btn(side, 'Read text from image', 'scan-text', () => this.runOcr(st, ta, say, readBtn), 'mod-cta');
+        btn(side, 'Different image', 'image', async () => { const fs = await chooseImageFiles(false); if (fs[0]) setImg(fs[0]); });
+        btn(side, 'Remove', 'x', () => { st.blob = null; st.url = ''; st.name = ''; st.file = null; drawDrop(); });
+      } else {
+        const ic = drop.createDiv({ cls: 'dms-drop-ic' }); setIcon(ic, 'image-plus');
+        drop.createDiv({ text: 'Drop or paste a statblock image here' });
+        const r = drop.createDiv({ cls: 'dms-row dms-wrap', attr: { style: 'justify-content:center' } });
+        btn(r, 'Choose image…', 'upload', async () => { const fs = await chooseImageFiles(false); if (fs[0]) setImg(fs[0]); });
+        btn(r, 'From vault…', 'image', () => new ImageSuggestModal(this.app, async f => { const buf = await this.app.vault.readBinary(f); const ext = f.extension === 'jpg' ? 'jpeg' : f.extension; setImg(new Blob([buf], { type: 'image/' + ext }), f.name, f); }).open());
+      }
+    };
+    const setImg = (blob, name, file) => { st.blob = blob; st.name = name || blob.name || 'image'; st.file = file || null; st.url = URL.createObjectURL(blob); say(''); drawDrop(); };
+    makeImageDropTarget(drop, fs => setImg(fs[0]));
+    drawDrop(); say(st.msg);
+    btn(foot, 'Fill the builder', 'wand', () => {
+      if (!st.text.trim()) { say(st.url ? 'Click “Read text from image” first, or paste the text.' : 'Paste statblock text or add an image first.', 'dms-warn'); return; }
+      const r = parseStatblockText(st.text);
+      const keepImg = this.sb.image;
+      for (const [k, v] of Object.entries(r.sb)) { if (Array.isArray(v) && !v.length && k !== 'saves') continue; if (v === '' || v == null) continue; this.sb[k] = v; }
+      if (!r.sb.saves.length) this.sb.saves = this.sb.saves || [];
+      if (r.sb.cr && !CR_LIST.includes(String(r.sb.cr))) this.sb.cr = '1';
+      this.sb.image = keepImg;
+      if (st.url && st.useArt) { if (st.file) { this.pendingArt = null; this.sb.image = imageLinkFor(this.app, st.file, this.opts.file || ''); } else this.pendingArt = { blob: st.blob, name: st.name, url: st.url }; }
+      st.msg = 'Filled from the import: ' + r.found.join(', ') + '.' + (r.warnings.length ? ' ⚠ ' + r.warnings.join(' ') : ' Check the details, then save.');
+      st.open = true;
+      this.contentEl.empty(); this.onOpen();
+    }, 'mod-cta');
+    btn(foot, 'Clear', 'eraser', () => { st.text = ''; ta.value = ''; say(''); });
+  }
+  async runOcr(st, ta, say, b) {
+    const s = this.plugin.settings;
+    if (s.ocrAllowed !== true) {
+      const ok = await new Promise(res => new OcrConsentModal(this.app, res).open());
+      if (!ok) { say('OCR is off. You can still paste the statblock text below.'); return; }
+      s.ocrAllowed = true; await this.plugin.saveSettings();
+    }
+    if (b) b.disabled = true;
+    say('Loading the OCR engine…');
+    try {
+      const text = await ocrImage(st.blob, (p, status) => say((/recogniz/i.test(status) ? 'Reading text… ' : 'Loading the OCR engine… ') + Math.round(p * 100) + '%'));
+      st.text = text.trim(); ta.value = st.text;
+      say(st.text ? 'Text read from the image — fix anything obvious, then click “Fill the builder”.' : 'No text found in that image. Try a sharper, straighter picture, or paste the text.', st.text ? 'dms-ok' : 'dms-warn');
+    } catch (e) { say(e.message + ' — you can paste the statblock text instead.', 'dms-warn'); }
+    finally { if (b) b.disabled = false; }
+  }
+}
+
+class OcrConsentModal extends Modal {
+  constructor(app, done) { super(app); this.done = done; this.answer = false; }
+  onOpen() {
+    const c = this.contentEl; c.createEl('h3', { text: 'Read text from images?' });
+    c.createEl('p', { text: 'To read text from a picture, DM Statblocks downloads the free Tesseract OCR engine and English language data (about 15 MB) from cdn.jsdelivr.net the first time. After that it is cached.' });
+    c.createEl('p', { cls: 'dms-muted', text: 'Your image is read on this device and is not uploaded anywhere. You can turn this off in Settings → DM Statblocks.' });
+    const r = c.createDiv({ cls: 'dms-row' });
+    btn(r, 'Download & read', 'download', () => { this.answer = true; this.close(); }, 'mod-cta');
+    btn(r, 'Not now', null, () => this.close());
+  }
+  onClose() { this.contentEl.empty(); this.done(this.answer); }
 }
 
 class AttackHelperModal extends Modal {
@@ -1141,6 +1536,7 @@ Object.assign(DMStatblocksPlugin.prototype, {
   registerMonsterTools() {
     this.addRibbonIcon('skull', 'Random monster/villain', () => new RandomMonsterModal(this).open());
     this.addCommand({ id: 'new-monster', name: 'Monster/Villain builder', callback: () => new MonsterBuilderModal(this, null, {}).open() });
+    this.addCommand({ id: 'import-monster', name: 'Import a monster/villain from an image or text', callback: () => new MonsterBuilderModal(this, null, { importOpen: true }).open() });
     this.addCommand({ id: 'new-villain', name: 'Monster/Villain builder (start as villain)', callback: () => new MonsterBuilderModal(this, { alignment: 'Lawful Evil' }, { villain: true }).open() });
     this.addCommand({ id: 'random-monster', name: 'Generate random monster/villain…', callback: () => new RandomMonsterModal(this).open() });
     this.addCommand({ id: 'edit-statblock', name: 'Edit this note\'s statblock in the builder', callback: () => { const f = this.app.workspace.getActiveFile(); if (f) this.openBuilderForFile(f.path); } });

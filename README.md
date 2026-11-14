@@ -9,6 +9,12 @@
 
 Works in **Live Preview**. Pairs with **[DM Codex](https://github.com/bearbaitdesigns/obsidian_dm_codex)** (dashboard, armory, spells, generators).
 
+## Importing statblocks and art
+
+The Monster/Villain builder can **import a statblock** from pasted text or from a picture (screenshot or photo), and add **art** that shows on the statblock. Imported art is saved to your attachments folder.
+
+**Network use:** reading text from a picture uses [Tesseract.js](https://github.com/naptha/tesseract.js) (OCR). It is downloaded from `cdn.jsdelivr.net` the first time you use it, and only after you agree. Your image is processed on your device and is never uploaded. You can turn this off in Settings → DM Statblocks; pasting text works offline.
+
 ## Install
 - **BRAT:** *Add beta plugin* and enter `bearbaitdesigns/obsidian_dm_statblocks`.
 - **Manual:** copy `main.js`, `manifest.json` and `styles.css` from the latest release into `<vault>/.obsidian/plugins/dm-statblocks/`.
