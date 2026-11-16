@@ -532,6 +532,17 @@ class CustomCombatantModal extends Modal {
 }
 
 /* ---------------- tracker view ---------------- */
+/** Open a note — or, if a tab already shows it, switch to that tab. Mod-click still forces a new tab. */
+function openOrFocus(app, path, sourcePath, forceNew) {
+  if (!forceNew) {
+    const dest = app.vault.getAbstractFileByPath(path) || app.metadataCache.getFirstLinkpathDest(path, sourcePath || '');
+    let found = null;
+    app.workspace.iterateAllLeaves(l => { if (!found && l.view && l.view.file && dest && l.view.file.path === dest.path) found = l; });
+    if (found) { app.workspace.setActiveLeaf(found, { focus: true }); if (app.workspace.revealLeaf) app.workspace.revealLeaf(found); return; }
+  }
+  app.workspace.openLinkText(path, sourcePath || '', true);
+}
+
 class TrackerView extends ItemView {
   constructor(leaf, plugin) { super(leaf); this.plugin = plugin; }
   getViewType() { return TRACKER_VIEW; }
@@ -583,7 +594,7 @@ class TrackerView extends ItemView {
     const main = row.createDiv({ cls: 'dms-main' });
     const nameRow = main.createDiv({ cls: 'dms-name-row' });
     const name = nameRow.createEl('a', { cls: 'dms-name', text: c.name });
-    name.addEventListener('click', e => { if (c.path) this.app.workspace.openLinkText(c.path, '', Keymap.isModEvent(e) || true); });
+    name.addEventListener('click', e => { if (c.path) openOrFocus(this.app, c.path, '', !!Keymap.isModEvent(e)); });
     if (c.path) name.addEventListener('mouseover', e => this.app.workspace.trigger('hover-link', { event: e, source: TRACKER_VIEW, hoverParent: this, targetEl: name, linktext: c.path }));
     nameRow.createSpan({ cls: 'dms-ac', text: 'AC ' + c.ac });
     // HP
@@ -591,7 +602,35 @@ class TrackerView extends ItemView {
     const pct = c.maxHp ? Math.max(0, Math.min(1, c.hp / c.maxHp)) : 1;
     const bar = hpRow.createDiv({ cls: 'dms-hpbar' }); const fill = bar.createDiv({ cls: 'dms-hpfill' }); fill.style.width = (pct * 100) + '%';
     if (pct <= 0.5) fill.addClass('is-bloodied');
-    hpRow.createSpan({ cls: 'dms-hp-text', text: c.hp + '/' + c.maxHp + (c.temp ? ' (+' + c.temp + ')' : '') });
+    const hpText = hpRow.createSpan({ cls: 'dms-hp-text' });
+    hpText.createSpan({ text: c.hp + '/' });
+    const maxEl = hpText.createEl('a', { cls: 'dms-maxhp', text: String(c.maxHp), attr: { title: 'Click to change max HP (number or dice, e.g. 45 or 6d10+12)' + (c.baseMaxHp && c.baseMaxHp !== c.maxHp ? ' · statblock: ' + c.baseMaxHp : '') } });
+    if (c.baseMaxHp && c.baseMaxHp !== c.maxHp) maxEl.addClass('is-overridden');
+    if (c.temp) hpText.createSpan({ text: ' (+' + c.temp + ')' });
+    maxEl.addEventListener('click', e => {
+      e.preventDefault();
+      const inp = document.createElement('input'); inp.type = 'text'; inp.className = 'dms-maxhp-input'; inp.value = String(c.maxHp);
+      maxEl.replaceWith(inp); inp.focus(); inp.select();
+      let done = false;
+      const commit = ok => {
+        if (done) return; done = true;
+        const raw = inp.value.trim();
+        if (ok && raw) {
+          let n; try { n = /d/i.test(raw) ? rollDice(raw).total : Math.round(Number(raw)); } catch (er) { new Notice(er.message); n = NaN; }
+          if (Number.isFinite(n) && n > 0) {
+            if (c.baseMaxHp == null) c.baseMaxHp = c.maxHp;
+            const lost = Math.max(0, c.maxHp - c.hp);       // keep the damage already taken
+            c.maxHp = n; c.hp = Math.max(0, Math.min(n, n - lost));
+            c.conditions = c.conditions.filter(x => x !== 'Bloodied');
+            if (c.hp > 0 && c.hp <= c.maxHp / 2) c.conditions.push('Bloodied');
+            new Notice(c.name + ': max HP ' + n + (/d/i.test(raw) ? ' (rolled ' + raw + ')' : ''));
+          } else if (ok) new Notice('Max HP must be a positive number or dice.');
+        }
+        this.save();
+      };
+      inp.addEventListener('keydown', ev => { if (ev.key === 'Enter') commit(true); else if (ev.key === 'Escape') commit(false); });
+      inp.addEventListener('blur', () => commit(true));
+    });
     const dmg = hpRow.createEl('input', { type: 'text', cls: 'dms-dmg', attr: { placeholder: '−dmg / +heal' } });
     dmg.addEventListener('keydown', e => {
       if (e.key !== 'Enter') return; const raw = dmg.value.trim(); if (!raw) return;
@@ -613,7 +652,7 @@ class TrackerView extends ItemView {
       p.addEventListener('click', () => {
         const base = cn === 'Concentrating' ? 'Concentration' : cn.replace(/ \d$/, '');
         const dest = this.app.metadataCache.getFirstLinkpathDest(base, '');
-        if (dest) this.app.workspace.openLinkText(dest.path, '', true); else new Notice('No rules note named "' + base + '"');
+        if (dest) openOrFocus(this.app, dest.path, '', false); else new Notice('No rules note named "' + base + '"');
       });
       p.addEventListener('contextmenu', e => { e.preventDefault(); c.conditions = c.conditions.filter(x => x !== cn); this.save(); });
     });
@@ -869,7 +908,7 @@ class DMStatblocksPlugin extends Plugin {
     const ul = box.createEl('ul');
     entries.forEach(e => {
       const li = ul.createEl('li');
-      if (e.f) { const a = li.createEl('a', { cls: 'internal-link', text: e.name }); a.addEventListener('click', ev => { ev.preventDefault(); this.app.workspace.openLinkText(e.f.path, ctx.sourcePath, true); }); }
+      if (e.f) { const a = li.createEl('a', { cls: 'internal-link', text: e.name }); a.addEventListener('click', ev => { ev.preventDefault(); openOrFocus(this.app, e.f.path, ctx.sourcePath, !!Keymap.isModEvent(ev)); }); }
       else li.createSpan({ text: e.name + ' (not found)', cls: 'dms-error' });
       li.appendText(' ×' + e.n + (e.sb ? ' — CR ' + e.sb.cr + ', ' + e.xp * e.n + ' XP' : ''));
     });

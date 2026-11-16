@@ -1,7 +1,7 @@
 {
 	"id": "dm-statblocks",
 	"name": "DM Statblocks",
-	"version": "1.5.0",
+	"version": "1.5.1",
 	"minAppVersion": "1.4.0",
 	"description": "D&D 2024 statblocks with clickable rolls, a monster & villain builder with CR check, random monster and encounter builders, and an initiative tracker. Works in Live Preview.",
 	"author": "bearbaitdesigns",

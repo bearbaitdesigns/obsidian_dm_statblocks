@@ -168,3 +168,9 @@
 .dms-import-status { min-height:1.2em; margin:4px 0; font-size: var(--font-ui-small); }
 .dms-import-art { display:flex; align-items:center; gap:6px; margin:4px 0 8px; font-size: var(--font-ui-small); }
 .dms-ok { color: var(--color-green); } .dms-warn { color: var(--color-orange); }
+
+/* ---------- tracker: editable max HP ---------- */
+.dms-maxhp { cursor: pointer; text-decoration: underline dotted; text-underline-offset: 2px; color: inherit; }
+.dms-maxhp:hover { color: var(--text-accent); }
+.dms-maxhp.is-overridden { color: var(--text-accent); font-weight: 600; }
+.dms-maxhp-input { width: 4.5em; padding: 0 4px !important; height: 1.6em; font-size: inherit; }
